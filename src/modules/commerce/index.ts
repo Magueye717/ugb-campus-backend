@@ -1,0 +1,48 @@
+import type { FastifyInstance, preHandlerHookHandler } from 'fastify';
+import type { Db, MongoClient } from 'mongodb';
+
+import type { Clock } from '../../platform/clock.js';
+import type { Limiter } from '../../platform/security/limiter.js';
+import type { AccountsApi } from '../accounts/index.js';
+import type { AuditApi } from '../audit/index.js';
+import type { MediaApi } from '../media/index.js';
+import type { NotificationsApi } from '../notifications/index.js';
+import type { OrganizationsApi } from '../organizations/index.js';
+import type { PaymentsApi } from '../payments/index.js';
+import { commerceCollections } from './commerce.collections.js';
+import { registerCommerceRoutes } from './commerce.routes.js';
+import { CommerceService } from './commerce.service.js';
+
+export { commerceCollections };
+
+export const COMMERCE_SWEEP_QUEUE = 'commerce.sweep';
+
+export type CommerceApi = {
+  registerRoutes(app: FastifyInstance, requireAdmin: preHandlerHookHandler): void;
+  processors(): Record<string, () => Promise<unknown>>;
+  schedules: { queue: string; everyMs: number }[];
+  /** Tests and the seed. */
+  service: CommerceService;
+};
+
+export function createCommerceModule(d: {
+  db: Db;
+  mongo: MongoClient;
+  clock: Clock;
+  accounts: AccountsApi;
+  organizations: OrganizationsApi;
+  payments: PaymentsApi;
+  media: MediaApi;
+  notifications: NotificationsApi;
+  limiter: Limiter;
+  audit: AuditApi;
+}): CommerceApi {
+  const service = new CommerceService(d.db, d.mongo, d.clock, d.accounts, d.organizations, d.payments, d.media, d.notifications, d.limiter);
+  d.payments.registerPurpose('commerce_order', service.orderPayment);
+  return {
+    registerRoutes: (app, requireAdmin) => registerCommerceRoutes(app, { service, audit: d.audit, requireOrgRole: d.organizations.requireOrgRole, roleIn: (o, u, r) => d.organizations.roleIn(o, u, r), requireAdmin }),
+    processors: () => ({ [COMMERCE_SWEEP_QUEUE]: () => service.sweep() }),
+    schedules: [{ queue: COMMERCE_SWEEP_QUEUE, everyMs: 15 * 60_000 }],
+    service,
+  };
+}

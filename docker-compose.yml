@@ -1,0 +1,73 @@
+# Local infrastructure. MongoDB runs as a single-node replica set (transactions need one) on localhost:27018
+# (27017 is the standalone Mongo already used by other projects on this machine).
+#   docker compose up -d mongo                      # database only (Redis: the one already on localhost:6379)
+#   docker compose --profile redis up -d            # + Redis, for machines without one
+#   docker compose --profile app up -d --build      # + api and worker containers
+name: ugb-campus
+
+services:
+  mongo:
+    image: mongo:8.0
+    command: ['mongod', '--replSet', 'rs0', '--bind_ip_all', '--port', '27018']
+    ports: ['27018:27018']
+    volumes: ['mongo-data:/data/db']
+    # Initiates the replica set on first start. The member is announced as localhost:27018 so that
+    # clients on the host (npm run dev, tests) can follow the replica-set discovery.
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --port
+        - '27018'
+        - --eval
+        - "try { rs.status().ok } catch (e) { rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'localhost:27018' }] }).ok }"
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4-alpine
+    profiles: [redis]
+    command: ['redis-server', '--appendonly', 'yes']
+    ports: ['6379:6379']
+    volumes: ['redis-data:/data']
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: .
+    profiles: [app]
+    command: ['node', 'dist/main.js', 'api']
+    env_file: .env
+    # Inside a container, "localhost" is the container itself: reach the host's Mongo and Redis instead.
+    environment:
+      MONGODB_URI: mongodb://host.docker.internal:27018/?directConnection=true
+      REDIS_URL: redis://host.docker.internal:6379
+    ports: ['3000:3000']
+    depends_on:
+      mongo: { condition: service_healthy }
+    read_only: true
+    restart: unless-stopped
+
+  worker:
+    build: .
+    profiles: [app]
+    command: ['node', 'dist/main.js', 'worker']
+    env_file: .env
+    environment:
+      MONGODB_URI: mongodb://host.docker.internal:27018/?directConnection=true
+      REDIS_URL: redis://host.docker.internal:6379
+    depends_on:
+      mongo: { condition: service_healthy }
+    read_only: true
+    restart: unless-stopped
+
+volumes:
+  mongo-data:
+  redis-data:

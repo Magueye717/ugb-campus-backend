@@ -1,0 +1,99 @@
+import { Type } from 'typebox';
+
+import { PhoneInput } from '../../platform/http/schemas.js';
+import { CAMPUSES, PLATFORM_ROLES, REGIONS, UFR_CODES } from './accounts.types.js';
+
+const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
+
+export const MeResponse = Type.Object({
+  id: Type.String(),
+  firstName: Type.String(),
+  lastName: Type.String(),
+  initials: Type.String(),
+  phoneMasked: Type.String(),
+  platformRoles: Type.Array(Type.String()),
+  student: Nullable(
+    Type.Object({
+      studentNumber: Type.String(),
+      campus: Type.String(),
+      onCampus: Type.Boolean(),
+      village: Nullable(Type.String()),
+      room: Nullable(Type.String()),
+      ufr: Nullable(Type.String({ description: 'UFR code (GET /reference/student).' })),
+      region: Nullable(Type.String({ description: 'Home region (GET /reference/student).' })),
+      filiere: Nullable(Type.String()),
+      niveau: Nullable(Type.String()),
+      verified: Type.Boolean(),
+      identity: Nullable(
+        Type.Object(
+          { birthDate: Nullable(Type.String({ description: 'YYYY-MM-DD' })), birthPlace: Nullable(Type.String()), nationality: Nullable(Type.String()), fromCard: Type.Boolean(), updatedAt: Type.String() },
+          { description: 'Optional; best read from the student’s own card (POST /me/student-card/read).' },
+        ),
+      ),
+    }),
+  ),
+  /** Drives AuthContext.spaces in the app. */
+  spaces: Type.Array(Type.Union([Type.Literal('student'), Type.Literal('organizer'), Type.Literal('business'), Type.Literal('resto'), Type.Literal('alerts')]), {
+    description: 'Spaces the app can open, the first being home. resto: public restaurants’ stock levels (resto_u_staff); alerts: campus alerts (content_editor); admins get both.',
+  }),
+  organizations: Type.Array(Type.Object({ id: Type.String(), name: Type.String(), category: Type.String(), level: Type.String(), roles: Type.Array(Type.String()), capabilities: Type.Array(Type.String()) })),
+  payoutPhoneMasked: Type.String(),
+  email: Nullable(Type.Object({ address: Type.String(), verified: Type.Boolean() })),
+  /** Null until the media module ships (profile picture upload). */
+  avatarUrl: Nullable(Type.String()),
+  location: Nullable(Type.Object({ lat: Type.Number(), lng: Type.Number(), accuracyM: Nullable(Type.Number()), updatedAt: Type.String() })),
+});
+
+export const IdentityBody = Type.Object(
+  {
+    birthDate: Nullable(Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$' })),
+    birthPlace: Nullable(Type.String({ maxLength: 60 })),
+    nationality: Nullable(Type.String({ maxLength: 40 })),
+    fromCard: Type.Optional(Type.Boolean({ description: 'Read from the student card (then checked by the student).' })),
+  },
+  { additionalProperties: false },
+);
+
+export const EmailBody = Type.Object({ email: Type.String({ minLength: 3, maxLength: 254 }) }, { additionalProperties: false });
+
+export const LocationBody = Type.Object(
+  {
+    lat: Type.Number({ minimum: -90, maximum: 90 }),
+    lng: Type.Number({ minimum: -180, maximum: 180 }),
+    /** Accuracy radius reported by the phone, in metres. */
+    accuracyM: Type.Optional(Type.Number({ minimum: 0, maximum: 100_000 })),
+  },
+  { additionalProperties: false },
+);
+
+export const ResidenceBody = Type.Object(
+  { onCampus: Type.Boolean(), village: Type.Optional(Nullable(Type.String({ maxLength: 40 }))), room: Type.Optional(Nullable(Type.String({ maxLength: 8 }))) },
+  { additionalProperties: false },
+);
+
+export const UfrInput = Type.Union(UFR_CODES.map((c) => Type.Literal(c)), { description: 'UFR code: GET /reference/student.' });
+export const RegionInput = Type.Union(REGIONS.map((r) => Type.Literal(r)), { description: 'Home region: GET /reference/student.' });
+export const OriginBody = Type.Object({ ufr: UfrInput, region: RegionInput }, { additionalProperties: false });
+
+export const StudentReference = Type.Object({
+  campuses: Type.Array(Type.Object({ key: Type.String(), label: Type.String(), villages: Type.Array(Type.String()) })),
+  ufrs: Type.Array(Type.Object({ code: Type.String(), name: Type.String() })),
+  regions: Type.Array(Type.String()),
+});
+
+export const NotificationPrefsSchema = Type.Object(
+  { social: Type.Boolean(), cours: Type.Boolean(), paiements: Type.Boolean(), campus: Type.Optional(Type.Boolean({ description: 'Restos publics, alertes du campus. Default true.' })) },
+  { additionalProperties: false },
+);
+
+export const CreateStaffUserBody = Type.Object(
+  { phone: PhoneInput, firstName: Type.String({ minLength: 1, maxLength: 60 }), lastName: Type.String({ minLength: 1, maxLength: 60 }) },
+  { additionalProperties: false },
+);
+
+export const PlatformRolesBody = Type.Object(
+  { roles: Type.Array(Type.Enum(PLATFORM_ROLES), { maxItems: PLATFORM_ROLES.length }) },
+  { additionalProperties: false },
+);
+
+export const CampusSchema = Type.Enum(CAMPUSES);

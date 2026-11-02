@@ -1,0 +1,81 @@
+import type { FastifyInstance, preHandlerHookHandler } from 'fastify';
+import type { Db } from 'mongodb';
+
+import { actorOf } from '../../platform/auth/auth.js';
+import type { Clock } from '../../platform/clock.js';
+import { errors } from '../../platform/http/errors.js';
+import { toObjectId } from '../../platform/http/schemas.js';
+import type { AuditApi } from '../audit/index.js';
+import { accountsCollections, accountsMigrations } from './accounts.collections.js';
+import { AccountsRepository } from './accounts.repository.js';
+import { registerAccountsRoutes } from './accounts.routes.js';
+import { AccountsService } from './accounts.service.js';
+import type { OrganizationsPort, PlatformRole } from './accounts.types.js';
+
+export type { StudentCard } from './accounts.service.js';
+export type { Audience, AudienceProfile, Campus, NewStudentAccount, OrganizationsPort, MembershipSummary, PlatformRole, Region, UfrCode, UserDoc } from './accounts.types.js';
+export { CAMPUS_LABELS, CAMPUSES, PLATFORM_ROLES, REGIONS, UFR_CODES, UFRS, VILLAGES } from './accounts.types.js';
+export type { StudentProfileInput } from './accounts.service.js';
+export { CampusSchema, RegionInput, UfrInput } from './accounts.schemas.js';
+export { accountsCollections, accountsMigrations };
+
+/** Public surface of the accounts module. Other modules get this object, never the repository. */
+export type AccountsApi = Pick<
+  AccountsService,
+  | 'normalizeStudentNumber' | 'normalizeName' | 'residence' | 'phoneOrThrow' | 'availability' | 'createStudentAccount'
+  | 'origin' | 'audienceOf' | 'userIdsInAudience' | 'studentByNumber' | 'searchStudents'
+  | 'findForLogin' | 'findByPhone' | 'findById' | 'namesByIds' | 'contactsByIds' | 'hasStudentProfile' | 'notificationPrefsByIds' | 'recordLoginFailure' | 'recordLoginSuccess' | 'setPassword'
+  | 'createStaffUser' | 'setPlatformRoles'
+> & {
+  requireStudent: preHandlerHookHandler;
+  requirePlatformRole(role: PlatformRole): preHandlerHookHandler;
+  /** Any of these roles (admins always pass). */
+  requireAnyPlatformRole(roles: PlatformRole[]): preHandlerHookHandler;
+  registerRoutes(app: FastifyInstance): void;
+};
+
+export function createAccountsModule(deps: { db: Db; clock: Clock; audit: AuditApi; organizations: () => OrganizationsPort }): AccountsApi {
+  const service = new AccountsService(new AccountsRepository(deps.db), deps.clock, deps.organizations);
+
+  const requireStudent: preHandlerHookHandler = async (req) => {
+    if (!(await service.hasStudentProfile(toObjectId(actorOf(req).userId)))) throw errors.forbidden('Réservé aux étudiants.');
+  };
+  const requirePlatformRole = (role: PlatformRole): preHandlerHookHandler => async (req) => {
+    if (!(await service.hasPlatformRole(toObjectId(actorOf(req).userId), role))) throw errors.forbidden();
+  };
+  const requireAnyPlatformRole = (roles: PlatformRole[]): preHandlerHookHandler => async (req) => {
+    const userId = toObjectId(actorOf(req).userId);
+    for (const role of roles) if (await service.hasPlatformRole(userId, role)) return;
+    throw errors.forbidden();
+  };
+
+  return {
+    normalizeStudentNumber: (v) => service.normalizeStudentNumber(v),
+    normalizeName: (v, f) => service.normalizeName(v, f),
+    residence: (i) => service.residence(i),
+    phoneOrThrow: (v) => service.phoneOrThrow(v),
+    origin: (i) => service.origin(i),
+    audienceOf: (u) => service.audienceOf(u),
+    studentByNumber: (n) => service.studentByNumber(n),
+    searchStudents: (w, l) => service.searchStudents(w, l),
+    userIdsInAudience: (a) => service.userIdsInAudience(a),
+    availability: (p, n) => service.availability(p, n),
+    createStudentAccount: (i, s) => service.createStudentAccount(i, s),
+    findForLogin: (i) => service.findForLogin(i),
+    findByPhone: (p, s) => service.findByPhone(p, s),
+    findById: (id) => service.findById(id),
+    namesByIds: (ids) => service.namesByIds(ids),
+    contactsByIds: (ids) => service.contactsByIds(ids),
+    hasStudentProfile: (id) => service.hasStudentProfile(id),
+    notificationPrefsByIds: (ids) => service.notificationPrefsByIds(ids),
+    recordLoginFailure: (id) => service.recordLoginFailure(id),
+    recordLoginSuccess: (id) => service.recordLoginSuccess(id),
+    setPassword: (id, h, s) => service.setPassword(id, h, s),
+    createStaffUser: (i) => service.createStaffUser(i),
+    setPlatformRoles: (id, r) => service.setPlatformRoles(id, r),
+    requireStudent,
+    requirePlatformRole,
+    requireAnyPlatformRole,
+    registerRoutes: (app) => registerAccountsRoutes(app, { service, audit: deps.audit, requireStudent, requireAdmin: requirePlatformRole('admin') }),
+  };
+}

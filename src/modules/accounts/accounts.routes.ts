@@ -1,0 +1,108 @@
+import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
+import type { FastifyInstance, preHandlerHookHandler } from 'fastify';
+import { Type } from 'typebox';
+
+import { actorOf, requireAuth } from '../../platform/auth/auth.js';
+import { IdParams, toObjectId } from '../../platform/http/schemas.js';
+import type { AuditApi } from '../audit/index.js';
+import type { AccountsService } from './accounts.service.js';
+import { CreateStaffUserBody, EmailBody, IdentityBody, LocationBody, MeResponse, NotificationPrefsSchema, OriginBody, PlatformRolesBody, ResidenceBody, StudentReference } from './accounts.schemas.js';
+import { CAMPUS_LABELS, CAMPUSES, REGIONS, UFRS, VILLAGES } from './accounts.types.js';
+
+type Deps = {
+  service: AccountsService;
+  audit: AuditApi;
+  requireStudent: preHandlerHookHandler;
+  requireAdmin: preHandlerHookHandler;
+};
+
+export function registerAccountsRoutes(root: FastifyInstance, { service, audit, requireStudent, requireAdmin }: Deps) {
+  const app = root.withTypeProvider<TypeBoxTypeProvider>();
+  const me = (req: Parameters<typeof actorOf>[0]) => toObjectId(actorOf(req).userId);
+
+  app.get('/me', { preHandler: requireAuth, schema: { tags: ['me'], response: { 200: MeResponse } } }, async (req) => service.getMe(me(req)));
+
+  // Public (the sign-up form needs it): campuses and their villages, UFRs, home regions.
+  app.get('/reference/student', { schema: { tags: ['reference'], response: { 200: StudentReference } } }, async () => ({
+    campuses: CAMPUSES.map((key) => ({ key, label: CAMPUS_LABELS[key], villages: VILLAGES[key] })),
+    ufrs: UFRS.map((u) => ({ code: u.code, name: u.name })),
+    regions: [...REGIONS],
+  }));
+
+  // "Mon UFR et ma région": announcements for one UFR or region reach the student only once they're known.
+  app.put('/me/origin', { preHandler: [requireAuth, requireStudent], schema: { tags: ['me'], body: OriginBody } }, async (req, reply) => {
+    await service.updateOrigin(me(req), req.body);
+    return reply.status(204).send();
+  });
+
+  app.put('/me/identity', { preHandler: [requireAuth, requireStudent], schema: { tags: ['me'], description: 'Birth date, place of birth, nationality (optional).', body: IdentityBody } }, async (req, reply) => {
+    await service.updateIdentity(me(req), req.body);
+    return reply.status(204).send();
+  });
+
+  app.patch(
+    '/me/student-profile',
+    { preHandler: [requireAuth, requireStudent], schema: { tags: ['me'], body: ResidenceBody } },
+    async (req, reply) => {
+      await service.updateResidence(me(req), req.body);
+      return reply.status(204).send();
+    },
+  );
+
+  app.get('/me/notification-preferences', { preHandler: requireAuth, schema: { tags: ['me'], response: { 200: NotificationPrefsSchema } } }, async (req) =>
+    service.getNotificationPrefs(me(req)),
+  );
+
+  app.put('/me/notification-preferences', { preHandler: requireAuth, schema: { tags: ['me'], body: NotificationPrefsSchema } }, async (req, reply) => {
+    await service.setNotificationPrefs(me(req), req.body);
+    return reply.status(204).send();
+  });
+
+  // Keyed by user, not IP: a campus Wi-Fi shares one IP between thousands of students.
+  const perUser = (max: number, timeWindow: string) => ({ rateLimit: { max, timeWindow, hook: 'preHandler' as const, keyGenerator: (r: { actor: { userId: string } | null; ip: string }) => r.actor?.userId ?? r.ip } });
+
+  app.put('/me/email', { preHandler: requireAuth, config: perUser(10, '1 hour'), schema: { tags: ['me'], body: EmailBody } }, async (req, reply) => {
+    await service.setEmail(me(req), req.body.email);
+    return reply.status(204).send();
+  });
+
+  app.delete('/me/email', { preHandler: requireAuth, schema: { tags: ['me'] } }, async (req, reply) => {
+    await service.removeEmail(me(req));
+    return reply.status(204).send();
+  });
+
+  app.put('/me/location', { preHandler: requireAuth, config: perUser(60, '1 hour'), schema: { tags: ['me'], body: LocationBody } }, async (req, reply) => {
+    await service.setLocation(me(req), req.body);
+    return reply.status(204).send();
+  });
+
+  app.delete('/me/location', { preHandler: requireAuth, schema: { tags: ['me'] } }, async (req, reply) => {
+    await service.clearLocation(me(req));
+    return reply.status(204).send();
+  });
+
+  // ---- Admin (Swagger is the temporary back office, decision Q-12) -----------------------------------------
+
+  app.post(
+    '/admin/users',
+    { preHandler: [requireAuth, requireAdmin], schema: { tags: ['admin'], body: CreateStaffUserBody, response: { 201: Type.Object({ id: Type.String() }) } } },
+    async (req, reply) => {
+      const user = await service.createStaffUser(req.body);
+      await audit.record({ actor: { type: 'user', id: actorOf(req).userId }, action: 'user.create_staff', target: { type: 'user', id: user._id.toHexString() }, requestId: req.id });
+      return reply.status(201).send({ id: user._id.toHexString() });
+    },
+  );
+
+  app.put(
+    '/admin/users/:id/platform-roles',
+    { preHandler: [requireAuth, requireAdmin], schema: { tags: ['admin'], params: IdParams, body: PlatformRolesBody } },
+    async (req, reply) => {
+      const user = await service.setPlatformRoles(toObjectId(req.params.id), req.body.roles);
+      await audit.record({
+        actor: { type: 'user', id: actorOf(req).userId }, action: 'user.set_platform_roles',
+        target: { type: 'user', id: user._id.toHexString() }, requestId: req.id, metadata: { roles: user.platformRoles },
+      });
+      return reply.status(204).send();
+    },
+  );
+}

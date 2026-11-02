@@ -1,0 +1,192 @@
+# 09 — Decision log
+
+Business answers received after the architecture review. Where a decision changes an earlier document, **this file wins**.
+
+| Ref | Decision | Consequences in the design |
+|---|---|---|
+| Q-1 | During sign-up (mobile or web), users give a valid phone number that has Wave / Orange Money. That number is used to **move money to them**. | `users.payoutAccount = {phone, verifiedAt}`. It defaults to the login phone, which is already verified by OTP at sign-up. Changing it requires a new OTP (purpose `payout_phone`). |
+| Q-2 | **No money hold**, which means **no wallet balance**: money passes through the platform's merchant account and leaves as soon as it is due. Users never keep a balance in the app. | No wallet or balance collection. Two outbound flows: **refunds** to the user's payout number and **claims** by organizers. Both are recorded in `payouts` (see below). |
+| Q-3 | When a transferred ticket is cancelled, **the current holder** receives the refund. | Refund beneficiary = `tickets.holderUserId` at cancellation time, paid to that user's payout number. The anti-hoarding rule is kept: the purchaser still can't rebook the same departure. |
+| Q-4 | Transfers need **acceptance** by the recipient. The recipient must be a registered student. Cutoff at departure − 2 h. | As designed in `06` §2.5. Pending transfers expire at the earlier of 24 h or the cutoff. |
+| Q-6 | **Registration is by phone number.** Phone = account identity. The student number is **required, unique, not verified**. | No registry is needed for v1. A squatted student number is reassigned by an admin after an ID check (audited). Lost-card scans match on `studentProfiles.studentNumber`. |
+| Q-8 | Taxi: after **"On est partis"**, the organizer **claims** the collected amount from the app and receives it on their account. They pay the driver themselves. Passengers who leave after the lock lose their money. The organizer chooses the lock when proposing the trip ("non remboursable X minutes avant le départ", 5 to 120, shorter than the time before departure); skipped: 10 min (`TAXI_LOCK_MIN`), never earlier than half-way to the departure (updated 2026-11-01, was 30 min). | Claim endpoint `POST /taxi/trips/:id/claim` → payout of `paidPassengers × seatPrice` to the organizer's payout number. One claim per trip (unique). Leaving before the lock: refund to the passenger's payout number. |
+| Caravans (derived from Q-2/Q-8) | Caravan organizers **claim after the trip**, the same way. | `POST /org/:orgId/departures/:id/claim`, allowed once the departure is `departed`. Amount = confirmed, non-cancelled tickets × price. Payout to the organization's payout account. |
+| Q-12 | Full admin and organizer **API**, with **Swagger UI as the temporary back office**. | `/docs` enabled in non-production. In production, it stays behind basic auth or is disabled. |
+
+All other questions keep the **default** listed in `08-risks-and-questions.md`.
+
+## Data model additions (2026-10-31)
+
+| Collection | Change | Notes |
+|---|---|---|
+| users | `email` (optional, added after sign-up) | Unique, lower-cased, unverified until an e-mail provider exists. `PUT/DELETE /me/email`. |
+| users | `avatar` (profile picture) | Field ready (`{mediaId, url}`). Upload arrives with the media module: clients never send image URLs. |
+| users | `lastLocation` (current latitude / longitude) | Stored for future use as GeoJSON with a 2dsphere index. Personal data: visible only to the user, sent only with the location permission, deletable. `PUT/DELETE /me/location`. |
+| organizations | `kind` renamed **`category`** | Same values (Entreprise, Amicale, Transporteur, Restaurant). Existing documents migrated by `2026-10-31-organizations-kind-to-category`. The app's `CaravanOrganizer.kind` will map to `category` during integration. |
+| organizations | `email` | At creation (admin) or later (admin, or the owner with `PATCH /org/{orgId}`). |
+| organizations | `logo` | Field ready, upload with the media module. |
+
+Data migrations are versioned (`migrations` collection) and run by `npm run migrate` after the validators are applied.
+
+## Payment-model consequence: refunds become disbursements
+
+Because the user's payout number is known, refunds don't go back through the original checkout session. Instead, they are **disbursements** to that number, like organizer claims.
+
+- `refunds` is merged into **`payouts`** with `kind: 'refund' | 'organizer_claim'`:
+
+  ```
+  payouts { kind, beneficiaryUserId | beneficiaryOrgId, phone (snapshot), provider: 'wave'|'orange_money'|'simulated',
+            amount, reason, source {type, id}, status: 'requested'|'processing'|'succeeded'|'failed'|'manual_required',
+            providerTransferId?, idempotencyKey (unique), attempts, lastError? }
+  ```
+
+- **Provider for a refund:** the same provider as the original payment. **Provider for a claim:** chosen by the organizer.
+- The provider adapter gains `disburse({phone, amount, idempotencyKey})`. The real APIs are Wave Payout API and an Orange Money cash-in / merchant transfer API; both need confirmation once merchant access exists. The **simulated provider** implements it too, with an admin/dev page to make a payout succeed or fail.
+- Idempotency keys: `ticket:<id>:cancel`, `taxi:<participantId>:leave`, `taxi:<tripId>:claim`, `departure:<id>:claim`, `payment:<id>:unfulfillable`, `departure:<id>:min-not-reached:<ticketId>`.
+
+## Runtime decision
+
+- **Node 22 LTS** instead of 24: that is what is installed locally (nvm v22.13.0). The image uses `node:22-alpine`. Upgrading later is a one-line change.
+- Local infrastructure:
+  - MongoDB 8 runs in Docker as the single-node replica set `rs0`, published on **localhost:27018**. The Mongo on 27017 is a standalone instance (mongo 6, container `interesting_mcclintock`) holding other projects' data, and it can't run transactions; it is left untouched (decision taken 2026-10-31).
+  - Redis reuses the instance already running on **localhost:6379**. The compose Redis is behind the `redis` profile, for machines without a local Redis.
+
+## Sign-in and reset errors (decided 2026-10-31)
+
+- POST `/auth/login` says which part is wrong: **404 `ACCOUNT_NOT_FOUND`** "Aucun compte sur ce numéro." for an unknown phone or student number, **401 `WRONG_PASSWORD`** "Mot de passe incorrect." for a wrong password. This replaces the generic `INVALID_CREDENTIALS` of 04-api.md and 05-security.md §1.4.
+- Why it is acceptable: `/auth/register/check` already tells whether a number has an account, so a generic login error protected nothing. Guessing passwords stays bounded by the per-identifier limit (10 per 10 min) and the progressive account lock.
+- Password reset does the same: POST `/auth/otp` with `purpose: reset_password` answers **404 `ACCOUNT_NOT_FOUND`** for a number without an account, and sends nothing. The decoy challenges are removed.
+
+## Sunu Taxi and the payments core (decided 2026-10-31)
+
+Built first among the home-page APIs, because the app already has the "Proposer un trajet" form.
+
+- **Paying for a seat uses a minimal payments core now**, with the simulator standing in for Wave and Orange Money (`PAYMENTS_SIMULATOR=true`, refused in production). It covers payments, the webhook inbox and payouts (refunds and organizer claims). Real adapters plug in behind `PaymentProvider` once the merchant accounts exist (Q-1).
+- **Lock time:** 30 min before departure, or **half-way** between creation and departure for trips proposed less than an hour ahead (`lockAt = max(departure − 30 min, created + (departure − created) / 2)`). A "dans 15 min" trip locks after 7.5 min, so people who join still have a refundable window.
+- **Bounds:** seats 2–4 (organizer included), fare **500–20 000 FCFA**, departure between 10 min and 7 days ahead. The app sends `leaveInMinutes`, measured on the server clock, so a phone set to the wrong time still gets the right trip.
+- **Places stay free text** (2–80 characters, whitespace tidied). No suggestion list for now.
+- **Seat price** `ceil(fare / seats / 50) × 50` is computed by the server. The organizer pays no seat and covers empty ones.
+- **Hold:** joining takes the seat for 10 min (or until departure, if sooner) while paying. A payment that fails or is cancelled releases it at once. An expired hold is released by the payments sweeper. A late payment keeps the seat if one is still free and the student isn't in another trip; otherwise it is refunded automatically.
+- **Hand-over is immediate** to the earliest paid passenger, as the app does today. Their seat is refunded (organizers don't pay a seat) and the former organizer leaves the trip. An accept/decline step can come later.
+- **Claim:** after "On est partis", the organizer chooses Wave or Orange Money. The amount is paid passengers × seat price, including seats kept after a late leave. One claim per trip (idempotency key `taxi:<tripId>:claim`).
+- **People are shown by first name and last initial** ("Moussa S.") and a stable pseudonymous `key`, never a user id or phone number. The vehicle is shown only to the trip's people.
+- **Not on the backend yet:** the trip chat (messages stay on the phone until the messaging module) and push notifications for taxi events.
+- **Still open (Q-8):** a trip that is never marked departed stops blocking its people 15 min after its time. Whether passengers are then refunded or the organizer can still claim is undecided; for now the organizer can confirm departure until the chat closes (departure + 2 h).
+
+## Chat: one messaging module for every feature (decided 2026-10-31)
+
+Sunu Taxi is the first feature with a chat; lost & found (claims between finder and owner) is next, and others may follow. So the chat is **one generic module**, `messaging`, that knows nothing about taxis or lost items.
+
+- **A conversation belongs to a feature:** `type` (`taxi_trip`, `lost_claim`, …) + `contextRef` (the trip, the claim), unique together. A new feature adds its type to `CONVERSATION_TYPES` and nothing else in messaging.
+- **The owning feature decides who is in it.** It calls `messaging.sync(type, ref, {title, members, writableUntil, status}, session)` inside its own transaction whenever membership changes. Each member carries how they appear (`key`, `name`, `initials`, `role`) and whether they may write. Messaging never calls back into the feature.
+  - Taxi: organizer and paid passengers write; a passenger who left after the lock (seat paid) still reads; leaving before the lock removes access; read-only from `chatClosesAt` (departure + 2 h); closed when the trip is cancelled.
+- **System lines** come from the server (`messaging.postSystem`): "Trajet publié…", "Awa a rejoint le trajet", "… a quitté le trajet", "… est là ✓", "Taxi indiqué : …", hand-over, cancellation, "Vous êtes partis 🚕". Every member sees the same history. The lock line stays derived on the phone from `lockAt`.
+- **People are never identified by user id or phone** in the chat: the feature's pseudonymous key and "Moussa S.". Each message keeps a snapshot of its author, so it stays readable after they leave.
+- **Sending is REST only** (`POST /conversations/{id}/messages`, `clientMessageId` makes retries post once, 20 messages/min per conversation). **Receiving is real time** over one WebSocket per app (`/api/v1/ws`): first frame `{type:'auth', accessToken}`, then `{type:'sub', topic:'conversation:<id>'}`, checked against membership. Events: `message.created`, `conversation.updated`; each user also gets `conversation.activity` on `user:<id>` for badges. Fan-out between API instances goes through Redis pub/sub, published only after the transaction commits.
+- **Access is re-checked live:** when membership changes, sockets that lost access are unsubscribed (`unsubscribed`, reason `revoked`). The socket closes with 4401 when the access token expires; the app refreshes it and reconnects, then fetches `?after=<last id>` to fill the gap. Delivery over the socket is best effort; REST is the source of truth.
+- **Safety:** reporting a message (`…/report`) stores a copy for review (`GET /admin/message-reports`); blocking someone (`…/block-author`) hides their messages from me in every conversation of every feature.
+- **Not yet:** push notifications for new messages (notifications module), retention / deletion 90 days after closing (Q-20), lost & found wired to it (its screens are still mock data).
+
+## Caravans and generic ticketing (decided 2026-10-31)
+
+Tickets will exist for other events than caravans, so **ticketing is its own module** and caravans is one user of it.
+
+**`ticketing` (generic)** owns three collections and knows nothing about buses:
+- `tickets`: `kind` (`caravan_seat` now; `event_entry`… later), `eventId` (the departure, the concert…), `orgId` (who may scan it), `code` (6 random characters, unique per event), `purchaserUserId` (never changes), `holderUserId` (changes on transfer, receives refunds — Q-3), `source` (the purchase that issued it, **unique**: a retried confirmation issues one ticket), `price`, `paidWith`, `seat`, `details` (kind-specific, e.g. pickup/drop-off stop ids), `status`, `version` (+1 on transfer), `admittedAt` (cache), `cancellation`.
+  - Unique: `{source}`, `{eventId, code}`, and **one active ticket per person per event** `{eventId, holderUserId}` where `status: 'active'` (also stops a transfer to someone who already holds one).
+- `ticketTransfers`: `pending → accepted | declined | cancelled | expired`; one pending per ticket (unique partial); expires at the earlier of 24 h or the kind's deadline (caravans: departure − 2 h). Accepting swaps the holder and bumps the version in one transaction.
+- `admissions`: every scan, append-only (admitted / duplicate / rejected + reason), `clientScanId` unique per organization (retries and offline batches recorded once), **one active admission per ticket** (unique partial): two phones scanning the same passenger board them once. "Faire descendre" voids the admission, it is never deleted.
+- **QR codes** are EdDSA-signed compact JWS (audience `ticket`: ticket id, event id, version — no personal data). A screenshot of a transferred ticket is refused (`stale_version`); a forged one too (`bad_signature`). Generated on each `GET /tickets/{id}`.
+- A kind registers a **`TicketKindHandler`**: how to present the event, the cancellation fee, the transfer deadline, extra recipient rules, the admission window and messages, which events are open for scanning, and what to release on cancellation. Same pattern as payment purposes.
+
+**`caravans`** owns `vehicles` (capacity, seats per row, blocked seats; plate unique), `departures` (vehicle snapshot, stops with `stopId` `p1…`/`d1…` and times, price, minimum, `confirmBy`, `bookingClosesAt`, status `draft → published → confirmed → departed → completed`, or `cancelled`) and `bookings` (seat holds).
+- **Seats:** unique `{departureId, seat}` where `seatActive` (no double sale), unique `{departureId, userId}` where `countsForLimit` (one purchase per student per departure, still counted after giving the ticket away). Counters on the departure are for display only.
+- **Booking:** hold 10 min while paying (`caravan_booking` payment purpose); auto-pick = front-most free window seat, then front-most seat; a chosen seat taken a moment ago → `SEAT_TAKEN`. Payment success issues the ticket in the same transaction; the departure becomes `confirmed` once paid seats reach the minimum. Late payment keeps the seat if still free, else automatic refund.
+- **Cancellation by the holder:** free until 24 h before, then 10 %; refused once boarded or after departure. Refund to the holder's payout number.
+- **Minimum not reached** at `confirmBy` (sweeper, every minute): departure cancelled, every ticket refunded 100 %. **Organizer cancellation:** same, plus unpaid holds released.
+- **Day of the trip:** passenger list with names and phone numbers for organization members (owner / manager / scanner), every read audited. Scanning opens 3 h before the first pickup and closes 6 h after arrival. "Le bus repart de cet arrêt" records the stop; whoever was due there and not scanned is absent; leaving the first pickup marks the departure `departed`.
+- **Claim:** the owner collects, after departure, valid tickets + late-cancellation fees, paid to the **organization's** payout number (`payouts.beneficiaryOrgId`). Once per departure.
+- **Live:** every scan publishes on `event:<departureId>` (members of the organization only), so all of the organizer's phones see the same list.
+- **Not yet:** offline scanning (signature check with the public key + `admissions/batch` sync is ready server-side), push notifications (transfer received, departure confirmed or cancelled), ratings.
+
+## Offline scanning, claim screen, notifications (decided 2026-10-31)
+
+- **Offline scanning.** `GET /org/{orgId}/departures/{id}/offline-pack` gives the passenger list, each ticket's QR version, the typed codes and the Ed25519 public key of ticket QR codes. The organizer app downloads the packs of the next 24 h when "Mes activités" opens, and refreshes a departure's pack each time its list opens. Without network the phone verifies the QR signature itself (`@noble/curves`), refuses old versions and unknown codes, boards locally and queues the scan (AsyncStorage). Queued scans go to `/admissions/batch` as soon as the network is back (every 20 s while offline); the server stays the judge, and scans it refuses (another phone boarded the same person first…) are shown to the organizer. Unboarding, leaving a stop and claiming need the network. Packs of departures no longer listed are deleted from the phone (names and phone numbers).
+- **Claim in the app.** After departure the passenger list shows "X FCFA à récupérer"; the owner picks Wave or Orange Money; then the payout state ("demandé", "versé"). Other roles see that the owner collects.
+- **Notifications module.** `notifications` (the bell list: category, title, body, icon, semantic tone, app route; unique `{userId, dedupeKey}` so a retried event never notifies twice; kept 90 days) and `pushTokens` (Expo push tokens per phone; a phone signing in to another account moves; deactivated on sign-out and when Expo answers `DeviceNotRegistered`). Features call `notifications.notify(users, …, session)`; the list and the live bell update after commit, push is sent by the worker (`PUSH_PROVIDER=expo`, `log` in tests; production refuses `log`), honouring the Social / Cours / Paiements switches.
+- **What notifies today:** ticket offered / accepted / declined, departure confirmed (each holder, link to their ticket), departure cancelled by the organizer or for lack of passengers (with the refund), refund or claim sent, someone joined my taxi, my taxi trip cancelled, a trip handed over to me, new chat message (push only, not in the bell list; not to people who blocked the author). `POST /admin/notifications` notifies one account from the back office (testing push on a phone).
+- **Push on a phone needs** an EAS project id in `app.json` (`eas init`) and a development build; Expo Go on Android can't receive remote push. Until then the in-app bell works fully.
+
+## Seats for a companion: up to 2 per student (decided 2026-11-01)
+
+- **The rule.** A student can buy up to `maxSeatsPerStudent` seats per departure (2 by default, set by the organizer from 1 to 10): their own seat and/or seats for companions. The limit counts purchases, even once a ticket is given away. A student never holds two seats for themselves.
+- **Companions need no account.** Choosing a second seat in the app asks for the companion's full name and phone; they board and get off at the student's stops. Refused: the student's own number, the same number twice, a number that already has a seat on the departure (own ticket or someone's companion).
+- **One seat = one booking, one payment per order.** Seats bought together share an `orderId` (the payment's `purposeRef`): all are confirmed, or all expired / released / refunded. Each seat issues its own ticket (own code, own QR), so cancelling or transferring one doesn't touch the other.
+- **Enforced by indexes.** `bookings {departureId, userId, slot}` unique while the booking counts (slots 1..max: two purchases at the same moment can't take the last slot); `bookings {departureId, userId}` unique for a held seat for oneself; `tickets {eventId, holderUserId}` unique for active tickets the holder travels on (`holderTravels`), replacing the old one-ticket-per-holder index.
+- **Companion ticket.** Held by the purchaser with `passenger {name, phone}`. The scanner and the passenger list show the companion's name, "Accompagnant de Moussa D." and ask to check an ID. If the companion's number has a student account, they are offered the ticket after payment ("Moussa D. t'a réservé une place"); accepting makes it theirs (own QR, `passenger` cleared). If they don't answer, the purchaser keeps it and can send them the code.
+- **Groups.** Tickets with the same purchaser on a departure form a group: "2 billets" in the student's tickets, grouped rows and "34 passagers · 31 acheteurs" on the passenger list, and at the scanner the group's other seats with "Faire monter … aussi" (online or offline).
+
+## Public restaurants and home alerts (decided 2026-11-01)
+
+- **Two collections.** `publicRestos` (the university restaurants: slug, name, location, display order, lunch and dinner hours, active/archived) and `publicMenus` (one per restaurant, local date and meal, unique; the dishes with a stable `dishId` and a stock level: `available`, `low` "Bientôt épuisé", `critical` "Presque fini", `out` "Rupture"). Private restaurants stay a separate feature (orders, delivery).
+- **Who.** Students read `GET /public-restos?date=` (today in Dakar by default). The catering staff (platform role `resto_u_staff`, admins too) manage restaurants and menus under `/admin/public-restos…` from the back office (Swagger until the admin web platform): publish or replace a meal's menu, read a week back, change a dish's stock level during the service.
+- **Rupture.** Marking a dish `out` on today's menu, before the end of that service, raises a home-screen alert "Rupture · Thiébou dieun · Resto 1" (with what's still on the menu) until the end of the service, and pushes it once to everyone with the app. Back in stock, or removed from the menu: the alert goes. A rupture on another day or after the service is recorded but isn't news.
+- **Alerts module.** `alerts` holds the home screen's notices: posted by the campus team (`content_editor`; title, text, icon, tone, optional app link, start and end, optional push) or raised by a feature with a unique `sourceKey` (raising again updates the same alert). `GET /alerts` returns what's showing now, most serious first. It replaces the app's mock alert.
+- **Broadcast push.** `notifications.broadcast` pushes to every phone with the app, without a line in the bell list (the home screen shows it), in batches of 500 users, under a new `campus` category ("Restos publics, alertes du campus"); a missing switch counts as on.
+- **Spaces by role.** `/me.spaces` lists every space the account can open, the first being home: `student` (student profile), `organizer` (an organization membership), then one per platform role: `resto` (`resto_u_staff`: today's menus, one tap per dish for its stock level) and `alerts` (`content_editor`: post with an end time and an optional push, withdraw); admins get both. A student given a role stays a student first; anyone with several spaces switches from "Mes espaces" (profile / account screen). Planning menus and restaurants stays on the back office. Students see today's menus only.
+- **Stock levels:** `available`, `low` ("Bientôt fini"), `out` ("Rupture"); "Presque fini" was dropped (existing ones became `low`). A rupture always shows on the home screen; the push is the staff's choice (`notify`), like campus alerts (`push`).
+
+## "À la une" is an alert placement (decided 2026-11-01)
+
+- **One module for the home screen's notices.** An alert has a `placement`: `banner` (the strip at the top: short, urgent) or `headline` ("À la une": announcements such as elections, bursaries, exams), a `tag` (required for headlines), an optional `eventAt` (the day it's about, shown next to the item), a start and an end.
+- **Handled by two teams.** The communication team (`content_editor`) handles every alert posted by hand; the academic team (`academic_editor`) publishes and manages its own (`kind: academic`). Both open the "Communication" space (formerly "Alertes campus"). A restaurant's "rupture" can be withdrawn by the communication team but not edited (it follows the stock).
+- **Prepared in advance.** An alert can start later ("Programmée"); it appears on the home screen at its start. The optional push leaves when the alert goes online (worker every minute, claimed once), never twice, even after edits. Statuses: scheduled, live, ended, withdrawn. A live alert keeps its start when edited.
+- **Home screen.** The strip shows up to 3 banners; "À la une" shows urgent items first, then the newest, up to 5, with "Tout voir" for the rest. The app's mocks are gone.
+
+## Audiences: UFR, campus, region (decided 2026-11-01)
+
+- **Student profile.** Sign-up now asks the UFR (SAT, LSH, SJP, SEG, S2ATA, 2S, SEFS, CRAC; the code is stored) and the home region (Senegal's 14 regions, or "Hors Sénégal"). Accounts created before fill them in from "Mon UFR et ma région" (`PUT /me/origin`); the home screen asks until they do. `GET /reference/student` (public) lists campuses with their villages, UFRs and regions.
+- **Villages.** Campus 1: A to G, M, P, Q (shared rooms, mostly undergraduates). Campus 2: H to L, N, O (individual rooms, mostly postgraduates).
+- **Audience of an alert** (banner or "À la une"): `campuses`, `ufrs`, `regions`. Each non-empty list narrows (UFR SAT + Campus 1 = SAT students on Campus 1); all empty is the whole university. A student sees what matches their profile; a student who hasn't given their UFR (or region) doesn't see UFR- (or region-) targeted items; accounts without a student profile see whole-university items only. The push goes to the targeted students only.
+- **Restaurants** have a campus; a rupture goes to that campus's students. Any academic editor can target any UFR (restricting each Scolarité to its UFR can come later).
+
+## Banners, events and images (decided 2026-11-01)
+
+- **Images (`media`).** `POST /media/images?purpose=banner|event` (multipart, 10 MB): the server reads the real format from the bytes (JPEG, PNG, WebP, HEIC), turns the photo upright, resizes it to 1600 px at most, re-encodes it to WebP and drops its metadata (GPS…). Stored on disk in development (served on `/api/v1/media/…`), in an S3-compatible bucket in production (`MEDIA_STORAGE=s3`, AWS S3 or Cloudflare R2, read through `MEDIA_PUBLIC_URL`; production refuses `local`). Only the uploader can attach a picture.
+- **Banners (`banners`).** The home carousel. Two kinds: `ad` (anyone: "Sponsorisé", short title, short text, one picture, optional button to a website, WhatsApp, a call or a screen of the app) and `event` (an owner or manager of an organization verified for events promotes one of its published events; tapping opens the event page). Fixed packages (`bannerPackages`, managed by admins: "Une journée", "Trois jours", "Une semaine"). Flow: pay → pending review → validated by the communication team (shown from its first day, at the earliest tomorrow) or refused (refunded, reason sent). The owner can cancel before the review (refunded); the team can withdraw a running banner (not refunded). At most 6 banners per day on the carousel; an event cancelled or over leaves it.
+- **Events (`events`).** Organizations get an `events` capability (verified by the platform). An event: title, category (soirée, conférence, sortie, sport, culture), description, 1 to 8 pictures (the app slides them), place, start and end, sales deadline, up to 6 ticket types (name, price, places; price 0 = free), tickets per student (default 4). Created on the back office for now; published, then sold. Tickets are the generic ones (kind `event_entry`): several per order (the extra ones are given to friends by transfer), places taken by conditional updates per type, free events issued at once, cancellation free until 24 h before then 10 %, scanned at the entrance (opens 3 h before), attendee list, payout to the organization after the event, cancelling the event refunds everyone.
+
+## Students' events: review, then paid publication (decided 2026-11-01)
+
+- **Who.** Any student can create an event from the app ("Mes événements"). Their first event creates their own organization (category `Étudiant`): it gives them the organizer space (scanning, attendees) and the payout of the tickets to their phone. Organizations verified for events still publish directly, for free and for the whole university.
+- **Flow.** draft → submitted (`pending_review`) → the admins approve (`approved`), ask for corrections (`changes_requested`, the message is sent as a notification and shown on the event; the student edits and submits again) or refuse (`rejected`, with the reason). Every step is kept in `reviewLog`.
+- **Publication.** Once approved, the date, the place and the prices are frozen. The owner chooses who sees the event on the home screen (campus, village, UFR, region; each list narrows, none = the whole university), the places on sale per ticket type, and may touch up the pictures, the description, the venue's details and the tickets per student. Then pays the publication: 50 FCFA per place, at least 500 FCFA (`PUBLICATION_FEE`). Paid, the event is published and its sales open. A new request replaces the payment not made yet; a payment arriving for a replaced, cancelled or too-late event is refunded. The fee is not refunded if the owner cancels a published event (the tickets are).
+- **Home screen.** `GET /events` returns only the events for the viewer (same rule as announcements, plus the village). The home shows the next one like the caravans ("Prochain événement", "Réserver", "N autres événements pour toi"). The event page itself opens for anyone with the link (a banner is seen by everyone).
+- **Banner.** Promoting the event on the home carousel is a separate purchase (banner packages), from the published event ("Mettre en bannière"). An event's banner needs no review (the event was checked already): paid, it goes live from its first day. Ads are still reviewed. The form greys out the packages that would run more than a day past the event and marks the longest one that fits ("Conseillée").
+- **Start date.** An event may start at any time after now (no minimum delay); a start in the past is refused.
+- **Price shown upfront.** The creation form shows the publication price live from the places entered (`GET /me/events/publication-fee`), before anything is submitted; it is paid only once approved.
+- **Cover.** All the event's pictures slide on its page. On the banner, an event without a chosen cover shows one of its pictures at random (a new pick at each refresh of the carousel); the organizer can star one picture to make it the fixed cover (`fixedCover`, the first picture). A banner given its own picture keeps it (`ownImage`).
+
+## Lost and found (decided 2026-11-01)
+
+- **Board (`lost`).** Students declare lost or found items (`lostItems`): category, name, public details, where (+ spot), when (today / yesterday / this week), and for found items where it is now (the office, or kept by the finder). Found objects need a photo (`POST /media/images?purpose=lost`); cards never get one (name, face, number). A found object can carry a private detail only its finder sees, to check whoever says it's theirs. Open items, those returned this week and all of mine are listed; names are always masked ("Moussa S.").
+- **Conversations.** One per item and person (`lostClaims`, conversation type `lost_claim`, the messaging module does the rest: realtime, read marker, report, block): "C'est à moi" on a found object kept by its finder (the proof is posted first), "Je l'ai trouvé" on a lost item, and the owner of a found student card with its finder. Closing an item (the declarer, the card's owner, or the office) makes its chats read-only.
+- **Found student card.** The finder photographs it: the server reads it with OCR (tesseract.js, French, in the API process; one worker, one card at a time; the language data downloads once into `OCR_CACHE_DIR`) and never stores the photo. The student number (P232055, look-alike letters forgiven) gives the owner; without it, the names read are searched (whole first or last names, case and accents ignored, those matching both first). The finder can also type the number or a name. The list shows name, UFR, campus, village and a number hint (P23•••55) so namesakes can be told apart. Server-side OCR keeps Expo Go working (no native module); on-device OCR (ML Kit) would need a development build.
+- **Other cards (decided 2026-11-01).** The OCR also recognises identity cards (CEDEAO: labels at the top, the value under its label), driving licences (numbered fields: 1. name, 2. first names) and bank cards (no labels: the holder's name embossed in capitals at the bottom; bank words like VISA or ECOBANK are ignored). Without a student number, the names read are searched in every account whose first or last name *contains* them ("ndiay" finds Ndiaye), best matches first, up to 20; the finder picks the owner from the list (or an empty page offers another spelling or the office). The owner is told which card it is ("Ta carte bancaire a été trouvée"); found identity cards and licences are declared as `id-card`, bank cards as `bank-card` (never a photo). In the app, the card found is drawn (UGB student card, Senegalese identity card, licence, bank card), never photographed, and "Où l'as-tu trouvée ?" offers the campus places of the Lieux tab, or « Autre » to type it.
+- **Warning the owner.** Like a dish sold out: a push and an alert in the home strip, but personal (`alerts.forUserId`, kind `lost_card`, never in the back office), for 7 days or until they close it. It gives the finder's full name and phone number (the finder is told before confirming), where it was found and whether it goes to the office; a chat with the finder opens too. Unknown owner: the card goes to the office.
+- **Office.** `lost_office` staff list what the office holds (cards with the owner's name and phone, to check at the desk) and hand items over (`/admin/lost/...`). No screen in the app yet.
+
+## Private restaurants and shops (decided 2026-11-01)
+
+- **Who.** A restaurant or a shop is an organization with the `restaurant` or `shop` capability (category `Restaurant` or `Boutique`), created by an admin with its owner (account created for a new number; they set their password with "mot de passe oublié"; payouts go to that number). Its members get a `business` space in the app: orders (owner, managers, staff), catalog (owner and managers add and edit; staff only switch an item off for today), profile, team (owner adds managers and staff by phone, creating the account of a new number).
+- **Profile (`businesses`).** Name, specialty, description, photo, GPS point (typed, or the phone's position at the counter), address in words, campus, phone, opening hours (same every day, Dakar time), delivery fee (null: pickup only), a pause switch.
+- **Catalog (`catalogItems`).** Restaurants: menus and drinks. Shops: articles with an aisle and a stock (taken by an order with a conditional update, given back when unpaid, refused or cancelled).
+- **Orders (`commerceOrders`).** One business per order, paid online when ordering (Wave / Orange Money, purpose `commerce_order`). Paid: every team member gets a push. The business accepts, marks it ready (on its way / to pick up with the code) and completed: the amount is paid out to its number. It can refuse a new order with a reason, and the student can cancel before it's accepted: refunded in full. Orders left accepted or ready 12 h are completed by the worker. No platform commission yet.
+- **In the app.** Private restaurants are only reached from the Manger tab, below the university menus; the shops replace "Bourses" in the Campus tab. One page for both (menus and drinks, or articles by aisle), the basket, payment and live tracking.
+
+## Campus places and map (decided 2026-11-01)
+
+- **Places (`places`).** Name, category (études, restauration, services, sport, santé, administration, logement, culte, transport), description, area in words, campus, GPS point, hours, an icon, up to 6 photos, visible or hidden, order. Managed by the communication team (`content_editor`, admins) in the app's "Lieux" staff tab; the GPS point can be the phone's position on site. The seed places (70: villages, amphis, buildings, offices, restaurants, health, sport, mosques, services, transport) are positioned from OpenStreetMap; the seed retires the first demo list by name. Their pictures stay external links until replaced by uploads (`photos` takes upload ids or the urls already there).
+- **Map.** The Lieux tab has a list and the university's map, dark and framed on the campus only: the UGB outline (OpenStreetMap relation 5970980, served by `GET /places/campus`) drawn dashed, the outside dimmed, the camera kept on the campus box. Villages are written on the map, village mosques are small dots, other places, private restaurants and shops are icons named when zoomed in (layers can be switched off); street plan or satellite, back to the whole campus in one tap; a pin's card gives directions or opens it.
+- **OpenStreetMap data.** The outline and the place positions come from OpenStreetMap (ODbL): the map shows "© OpenStreetMap". Re-generate `places.campus.ts` from OSM if the campus outline changes. No third-party campus map (e.g. other apps' data) is copied.
+- **Directions.** Everywhere a place has a GPS point: the place's card and page, private restaurant cards (the blue chip, with the distance when the student allowed location), public restaurant cards (their point is set by the team, `coords`), the restaurant page.
