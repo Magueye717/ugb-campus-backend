@@ -3,13 +3,12 @@ import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fas
 import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
-import { IdParams, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
+import { IdParams, Nullable, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
 import type { AuditApi } from '../audit/index.js';
 import { PAYMENT_METHODS, PaymentView, paymentView } from '../payments/index.js';
 import type { BannersService } from './banners.service.js';
 import { BANNER_KINDS, BANNER_STATUSES, CTA_TARGETS, type BannerDoc, type BannerPackageDoc } from './banners.types.js';
 
-const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
 
 /**
  * An event's banner without its own picture shows the event's cover if the organizer chose one, otherwise one of its

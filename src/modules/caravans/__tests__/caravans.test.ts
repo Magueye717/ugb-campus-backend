@@ -31,20 +31,20 @@ const at = (ms: number) => new Date(T0 + ms).toISOString();
 
 let seq = 0;
 /** An organization with an owner and a scanner, a 12-seat minibus, and a published departure in 3 days. */
-async function setup(over: { minPassengers?: number; departIn?: number } = {}) {
+async function setup(over: { minPassengers?: number; departIn?: number; paymentMethods?: string[] } = {}) {
   t.clock.set(T0);
   const owner = await createStaff(t);
   const scanner = await createStaff(t);
   const org = await t.c.modules.organizations.create({ slug: `org-${++seq}-${Date.now() % 1e6}`, name: 'Khoulé & Frère', category: 'Entreprise', capabilities: ['caravans'], level: 'confirme', payoutPhone: owner.phone });
-  await t.c.modules.organizations.setMember(org._id, { phone: owner.phone, roles: ['owner'] }, null);
-  await t.c.modules.organizations.setMember(org._id, { phone: scanner.phone, roles: ['scanner'] }, null);
+  await t.c.modules.organizations.setOwner(org._id, owner.phone, null);
+  await t.c.modules.organizations.setMember(org._id, 'organizer', { phone: scanner.phone, roles: ['scanner'] }, null);
   const o = { userId: owner.userId.toHexString() };
   const orgId = org._id.toHexString();
   const vehicle = await ok(call(o, 'POST', `/org/${orgId}/vehicles`, { label: 'Minibus 12 places', plate: `DK ${1000 + seq} AB`, capacity: 12 }), 201);
   const start = over.departIn ?? 3 * DAY;
   const draft = await ok(
     call(o, 'POST', `/org/${orgId}/departures`, {
-      vehicleId: vehicle.id, direction: 'aller', from: 'UGB', to: 'Dakar', price: 3500, minPassengers: over.minPassengers ?? 2,
+      vehicleId: vehicle.id, direction: 'aller', from: 'UGB', to: 'Dakar', price: 3500, minPassengers: over.minPassengers ?? 2, ...(over.paymentMethods ? { paymentMethods: over.paymentMethods } : {}),
       pickups: [{ place: 'UGB · Village E', at: at(start) }, { place: 'Saint-Louis · Gare routière', at: at(start + 40 * MIN) }],
       dropoffs: [{ place: 'Thiès · Mairie', at: at(start + 4 * HOUR) }, { place: 'Dakar · Colobane', at: at(start + 5.5 * HOUR) }],
     }),
@@ -66,6 +66,15 @@ async function buy(s: Who, depId: string, body: object = {}) {
 }
 
 describe('browse and book', () => {
+  it('the organizer chooses the providers: one only, the other is refused', async () => {
+    const { dep } = await setup({ paymentMethods: ['wave'] });
+    expect(dep.paymentMethods).toEqual(['wave']);
+    const s = await registerStudent(t);
+    const refused = await call(s, 'POST', `/caravans/departures/${dep.id}/bookings`, { pickupStopId: 'p1', dropoffStopId: 'd2', method: 'orange_money' });
+    expect(json(refused).field).toBe('method');
+    expect((await setup()).dep.paymentMethods).toEqual(['wave', 'orange_money']);
+  });
+
   it('lists published departures; the plate is for ticket holders only', async () => {
     const { dep } = await setup();
     const s = await registerStudent(t);

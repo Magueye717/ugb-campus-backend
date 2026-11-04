@@ -28,9 +28,12 @@ let seq = 0;
 /** A restaurant, staff and a student; the clock at 12:30 in Dakar on `day` (Dakar is UTC+0). */
 async function setup(day = '2026-11-02') {
   t.clock.set(Date.parse(`${day}T09:00:00Z`));
-  const staff = await createStaff(t, ['resto_u_staff']);
+  // The super admin creates the restaurant and gives it to a menu publisher.
+  const admin = { userId: (await createStaff(t, ['admin'])).userId.toHexString() };
+  const staff = await createStaff(t);
   const s = { userId: staff.userId.toHexString() };
-  const resto = await ok(call(s, 'POST', '/admin/public-restos', { slug: `resto-t${++seq}-${Date.now() % 1e5}`, name: `Resto ${seq}`, location: 'Campus 1', sortOrder: seq }), 201);
+  const resto = await ok(call(admin, 'POST', '/admin/public-restos', { slug: `resto-t${++seq}-${Date.now() % 1e5}`, name: `Resto ${seq}`, location: 'Campus 1', sortOrder: seq }), 201);
+  expect((await call(admin, 'PUT', '/admin/team', { phone: staff.phone, roles: ['resto_u_staff'], restoIds: [resto.id] })).statusCode).toBe(204);
   const menu = await ok(
     call(s, 'PUT', `/admin/public-restos/${resto.id}/menus/${day}/lunch`, {
       dishes: [
@@ -40,8 +43,10 @@ async function setup(day = '2026-11-02') {
       ],
     }),
   );
-  return { staff: s, resto, menu, day, student: await registerStudent(t) };
+  return { staff: s, admin, resto, menu, day, student: await registerStudent(t) };
 }
+
+const types = (me: { spaces: { type: string }[] }) => me.spaces.map((x) => x.type);
 
 describe('staff space', () => {
   it('each role opens its space; two roles, two spaces; admins get them all', async () => {
@@ -49,19 +54,22 @@ describe('staff space', () => {
       [['resto_u_staff'], ['resto']],
       [['content_editor'], ['alerts']],
       [['resto_u_staff', 'content_editor'], ['resto', 'alerts']],
-      [['admin'], ['resto', 'alerts']],
+      [['admin'], ['admin', 'resto', 'alerts', 'directory']],
+      [['place_editor', 'shop_editor'], ['directory']],
       [['finance'], []],
     ] as const;
     for (const [roles, spaces] of cases) {
       const u = await createStaff(t, [...roles]);
-      expect(json(await call({ userId: u.userId.toHexString() }, 'GET', '/me')).spaces).toEqual(spaces);
+      expect(types(json(await call({ userId: u.userId.toHexString() }, 'GET', '/me')))).toEqual(spaces);
     }
   });
 
   it('a student given a role stays a student first, with the role’s space next', async () => {
     const s = await registerStudent(t);
     await t.c.modules.accounts.setPlatformRoles(new ObjectId(s.userId), ['resto_u_staff']);
-    expect(json(await call(s, 'GET', '/me'))).toMatchObject({ spaces: ['student', 'resto'], platformRoles: ['resto_u_staff'] });
+    const me = json(await call(s, 'GET', '/me'));
+    expect(types(me)).toEqual(['student', 'resto']);
+    expect(me.platformRoles).toEqual(['resto_u_staff']);
   });
 });
 
@@ -88,6 +96,38 @@ describe('menus', () => {
     expect((await call(staff, 'PUT', `/admin/public-restos/${resto.id}/menus/${day}/lunch`, { dishes: [{ name: 'Yassa' }, { name: 'yassa' }] })).statusCode).toBe(400);
     const week = await ok(call(staff, 'GET', `/admin/public-restos/${resto.id}/menus?from=${day}&to=2026-11-08`));
     expect(week.items).toHaveLength(1);
+  });
+
+  it('the dish catalogue: the usual dishes, plus every dish published (once per menu); a typo can be removed', async () => {
+    const { staff, resto, day, student } = await setup();
+    type C = { id: string; name: string; detail: string; meals: string[]; uses: number };
+    const dinner = (await ok(call(staff, 'GET', '/admin/public-dishes?meal=dinner'))).items as C[];
+    // Seeded: Niébé is a dinner dish, offered before the lunch-only ones.
+    expect(dinner.findIndex((d) => d.name === 'Niébé')).toBeLessThan(dinner.findIndex((d) => d.name === 'Domoda'));
+    const find = async (name: string) => ((await ok(call(staff, 'GET', '/admin/public-dishes'))).items as C[]).find((d) => d.name === name);
+    const vermicelle = (await find('Vermicelle'))!.uses;
+    // A new dish typed by hand joins it; republishing the same menu doesn't count it twice.
+    const menu = await ok(call(staff, 'PUT', `/admin/public-restos/${resto.id}/menus/${day}/dinner`, { dishes: [{ name: 'Poulet braisé du chef', detail: 'Frites' }, { name: 'Vermicelle' }] }));
+    await ok(call(staff, 'PUT', `/admin/public-restos/${resto.id}/menus/${day}/dinner`, { dishes: menu.dishes.map((d: { id: string; name: string }) => ({ id: d.id, name: d.name })) }));
+    const added = (await find('Poulet braisé du chef'))!;
+    expect(added).toMatchObject({ detail: '', meals: ['dinner'], uses: 1 });
+    expect((await find('Vermicelle'))!.uses).toBe(vermicelle + 1);
+    expect((await call(student, 'GET', '/admin/public-dishes')).statusCode).toBe(403);
+    expect((await call(staff, 'DELETE', `/admin/public-dishes/${added.id}`)).statusCode).toBe(204);
+    expect(await find('Poulet braisé du chef')).toBeUndefined();
+  });
+
+  it('a menu publisher works on their restaurants only; lunch and dinner are published separately', async () => {
+    const { staff, resto, day } = await setup();
+    const other = await setup();
+    // Only theirs in the list; the other restaurant answers 404, and creating restaurants is the admin's.
+    expect((await ok(call(staff, 'GET', '/admin/public-restos'))).items.map((r: { id: string }) => r.id)).toEqual([resto.id]);
+    expect((await call(staff, 'PUT', `/admin/public-restos/${other.resto.id}/menus/${day}/dinner`, { dishes: [{ name: 'Niébé' }] })).statusCode).toBe(404);
+    expect((await call(staff, 'POST', '/admin/public-restos', { slug: 'resto-x', name: 'Resto X' })).statusCode).toBe(403);
+    // Dinner later in the day, lunch untouched.
+    await ok(call(staff, 'PUT', `/admin/public-restos/${resto.id}/menus/${day}/dinner`, { dishes: [{ name: 'Niébé' }] }));
+    const r = (await ok(call(staff, 'GET', `/public-restos?date=${day}`))).restos.find((x: { id: string }) => x.id === resto.id);
+    expect([r.menus.lunch.dishes.length, r.menus.dinner.dishes.length]).toEqual([3, 1]);
   });
 });
 
@@ -215,7 +255,7 @@ describe('campus alerts and "À la une"', () => {
     expect((await ok(call(comm, 'GET', '/admin/alerts'))).items.find((x: { id: string }) => x.id === a.id)).toMatchObject({ editable: true });
     await ok(call(comm, 'PUT', `/admin/alerts/${a.id}`, { ...exam, body: 'Calendrier en ligne' }));
     // The academic team opens the communication space too.
-    expect(json(await call(academic, 'GET', '/me')).spaces).toEqual(['alerts']);
+    expect(json(await call(academic, 'GET', '/me')).spaces.map((x: { type: string }) => x.type)).toEqual(['alerts']);
   });
 
   it('a restaurant’s rupture can be taken down by the communication team, not edited', async () => {
@@ -278,8 +318,8 @@ describe('who an alert is for', () => {
   });
 
   it('a restaurant’s rupture reaches its campus only', async () => {
-    const { staff, resto, menu, day } = await setup();
-    await ok(call(staff, 'PATCH', `/admin/public-restos/${resto.id}`, { campus: 'campus2' }));
+    const { staff, admin, resto, menu, day } = await setup();
+    await ok(call(admin, 'PATCH', `/admin/public-restos/${resto.id}`, { campus: 'campus2' }));
     t.clock.set(Date.parse(`${day}T12:30:00Z`));
     await ok(call(staff, 'PATCH', `/admin/public-restos/${resto.id}/menus/${day}/lunch/dishes/${menu.dishes[0].id}`, { status: 'out' }));
     const [c1, c2] = [await registerStudent(t, { campus: 'campus1' }), await registerStudent(t, { campus: 'campus2' })];

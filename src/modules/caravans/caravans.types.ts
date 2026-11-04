@@ -53,6 +53,8 @@ export type DepartureDoc = {
   price: number;
   /** Seats one student can buy on this trip (their own + companions). Set by the organizer, 2 by default. */
   maxSeatsPerStudent: number;
+  /** The providers the organizer accepts for this trip (Wave, Orange Money, or both). */
+  paymentMethods: PaymentMethod[];
   /** Confirmed seats needed for the trip to go ahead; below that at `confirmBy`, everyone is refunded. */
   minPassengers: number;
   confirmBy: Date;

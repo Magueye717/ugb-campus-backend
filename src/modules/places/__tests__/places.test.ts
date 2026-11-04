@@ -18,8 +18,8 @@ const ok = async (res: Promise<{ statusCode: number; body: string }>, status = 2
 };
 
 describe('places', () => {
-  it('the communication team adds, edits and hides places; students see the active ones', async () => {
-    const editor = await createStaff(t, ['content_editor']);
+  it('the place editors add, edit and hide places; students see the active ones', async () => {
+    const editor = await createStaff(t, ['place_editor']);
     const s = await registerStudent(t);
     await t.c.modules.places.service.seed([{ name: 'Bibliothèque universitaire', category: 'Études', location: { lat: 16.0629, lng: -16.4232 }, photoUrls: ['https://example.com/bu.jpg'] }]);
 
@@ -53,6 +53,7 @@ describe('places', () => {
     const s = await registerStudent(t);
     const campus = await ok(call(s, 'GET', '/places/campus'));
     expect(campus.attribution).toBe('© OpenStreetMap');
+    expect(campus.start).toMatchObject({ lat: expect.any(Number), lng: expect.any(Number), delta: expect.any(Number) });
     expect(campus.outline.length).toBeGreaterThan(10);
     expect(campus.outline[0]).toEqual(campus.outline.at(-1));
     for (const p of campus.outline) {

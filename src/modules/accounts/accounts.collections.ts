@@ -14,6 +14,7 @@ export const accountsCollections: CollectionSpec[] = [
           lastName: bson.string({ minLength: 1, maxLength: 60 }),
           status: bson.enumOf(['active', 'suspended', 'deleted']),
           platformRoles: bson.array(bson.enumOf(PLATFORM_ROLES)),
+          restoIds: bson.array(bson.objectId),
           login: bson.object({ failedCount: bson.int({ minimum: 0 }) }, ['failedCount']),
           payoutAccount: bson.object({ phone: bson.string(), verifiedAt: bson.date }, ['phone', 'verifiedAt']),
           email: bson.nullable(bson.object({ address: bson.string({ maxLength: 254 }), verifiedAt: bson.nullable(bson.date), addedAt: bson.date }, ['address', 'addedAt'])),

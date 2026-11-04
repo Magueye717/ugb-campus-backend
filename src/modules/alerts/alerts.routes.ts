@@ -3,13 +3,12 @@ import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fas
 import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
-import { IdParams, toObjectId } from '../../platform/http/schemas.js';
+import { IdParams, Nullable, toObjectId } from '../../platform/http/schemas.js';
 import { CAMPUSES, REGIONS, UFR_CODES, type AudienceProfile } from '../accounts/index.js';
 import type { AuditApi } from '../audit/index.js';
 import { alertView, type AlertsService, type Editor } from './alerts.service.js';
 import { ALERT_PLACEMENTS, ALERT_TONES, type AlertInput } from './alerts.types.js';
 
-const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
 
 export const AlertView = Type.Object({
   id: Type.String(),

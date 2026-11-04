@@ -7,7 +7,7 @@ import type { Clock } from '../clock.js';
 const ISSUER = 'ugb-campus';
 
 export type AccessClaims = { sub: string; sid: string; roles: string[]; /** Expiry, seconds since epoch: long-lived connections (WebSocket) close then. */ exp: number };
-export type VerificationPurpose = 'register' | 'reset_password';
+export type VerificationPurpose = 'register' | 'reset_password' | 'change_phone';
 export type VerificationClaims = { phone: string; purpose: VerificationPurpose; challengeId: string };
 /** What a ticket QR code says: which ticket, for which event, at which version (a transfer bumps it). */
 export type TicketClaims = { ticketId: string; eventId: string; version: number };
@@ -68,8 +68,8 @@ export class TokenService {
 
   async verifyVerification(token: string): Promise<VerificationClaims | null> {
     const p = await this.verify(token, 'verification');
-    if (!p?.jti || typeof p.phone !== 'string' || (p.purpose !== 'register' && p.purpose !== 'reset_password')) return null;
-    return { phone: p.phone, purpose: p.purpose, challengeId: p.jti };
+    if (!p?.jti || typeof p.phone !== 'string' || !['register', 'reset_password', 'change_phone'].includes(p.purpose as string)) return null;
+    return { phone: p.phone, purpose: p.purpose as VerificationPurpose, challengeId: p.jti };
   }
 
   /**

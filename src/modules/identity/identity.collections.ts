@@ -6,7 +6,7 @@ export const identityCollections: CollectionSpec[] = [
     validator: {
       $jsonSchema: bson.object(
         {
-          purpose: bson.enumOf(['register', 'reset_password']),
+          purpose: bson.enumOf(['register', 'reset_password', 'change_phone']),
           phone: bson.string(),
           codeHash: bson.string({ minLength: 64, maxLength: 64 }),
           attempts: bson.int({ minimum: 0 }),

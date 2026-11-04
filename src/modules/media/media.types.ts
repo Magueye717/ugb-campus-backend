@@ -1,7 +1,7 @@
 import type { ObjectId } from 'mongodb';
 
 /** What an image is for: decides its size limit and who may attach it. */
-export const MEDIA_PURPOSES = ['banner', 'event', 'lost', 'business', 'place'] as const;
+export const MEDIA_PURPOSES = ['banner', 'event', 'lost', 'business', 'place', 'avatar'] as const;
 export type MediaPurpose = (typeof MEDIA_PURPOSES)[number];
 
 /**

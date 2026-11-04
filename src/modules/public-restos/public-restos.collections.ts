@@ -1,7 +1,31 @@
+import { ObjectId } from 'mongodb';
+
 import type { DataMigration } from '../../platform/db/migrations.js';
 import { bson, type CollectionSpec } from '../../platform/db/schema.js';
 import { CAMPUSES } from '../accounts/index.js';
-import { DISH_STATUSES, MEALS } from './public-restos.types.js';
+import { DISH_STATUSES, MEALS, type Meal } from './public-restos.types.js';
+
+/** "Thiébou  Dieun " → "thiébou dieun": one catalogue entry per dish name. */
+export const dishKey = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
+
+/** The dishes the university restaurants usually serve: the staff pick them instead of typing them. */
+const COMMON_DISHES: { name: string; detail: string; meals: Meal[] }[] = [
+  { name: 'Thiébou dieun', detail: 'Riz au poisson', meals: ['lunch'] },
+  { name: 'Thiébou yapp', detail: 'Riz à la viande', meals: ['lunch'] },
+  { name: 'Yassa poulet', detail: 'Riz · poulet aux oignons', meals: ['lunch'] },
+  { name: 'Mafé', detail: 'Riz · sauce arachide', meals: ['lunch'] },
+  { name: 'Domoda', detail: 'Riz · sauce tomate', meals: ['lunch'] },
+  { name: 'Soupou kandja', detail: 'Riz · sauce gombo', meals: ['lunch'] },
+  { name: 'Vermicelle', detail: 'Poulet · légumes', meals: ['lunch', 'dinner'] },
+  { name: 'Bassi salté', detail: 'Couscous de mil · viande', meals: ['lunch', 'dinner'] },
+  { name: 'Niébé', detail: 'Haricots · pain', meals: ['dinner'] },
+  { name: 'Ndambé', detail: 'Haricots en sauce · pain', meals: ['dinner'] },
+  { name: 'Couscous', detail: 'Sauce à la viande', meals: ['dinner'] },
+  { name: 'Spaghetti bolognaise', detail: 'Viande hachée · sauce tomate', meals: ['dinner'] },
+  { name: 'Petits pois', detail: 'Viande · pain', meals: ['dinner'] },
+  { name: 'Lakh', detail: 'Bouillie de mil · lait caillé', meals: ['dinner'] },
+  { name: 'Frites omelette', detail: 'Pain', meals: ['dinner'] },
+];
 
 const hm = bson.string({ pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' });
 const service = bson.object({ start: hm, end: hm }, ['start', 'end']);
@@ -70,6 +94,22 @@ export const publicRestosMigrations: DataMigration[] = [
     description: 'Restaurants get a campus (null: for everyone) so their ruptures reach that campus only.',
     async up(db) {
       await db.collection('publicRestos').updateMany({ campus: { $exists: false } }, { $set: { campus: null } });
+    },
+  },
+  {
+    id: '2026-11-05-public-dishes',
+    description: 'The dish catalogue of the public restaurants: the usual dishes, and every dish already published.',
+    async up(db) {
+      const now = new Date();
+      const dishes = db.collection('publicDishes');
+      const add = (name: string, detail: string, meals: Meal[], uses: number) =>
+        dishes.updateOne(
+          { key: dishKey(name) },
+          { $setOnInsert: { _id: new ObjectId(), name: name.trim(), detail, createdAt: now }, $addToSet: { meals: { $each: meals } }, $inc: { uses }, $set: { updatedAt: now } },
+          { upsert: true },
+        );
+      for (const d of COMMON_DISHES) await add(d.name, d.detail, d.meals, 0);
+      for (const m of await db.collection('publicMenus').find({}).toArray()) for (const d of m.dishes as { name: string; detail: string }[]) await add(d.name, d.detail, [m.meal as Meal], 1);
     },
   },
 ];

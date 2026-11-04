@@ -5,9 +5,10 @@ import { isDuplicateKey } from '../../platform/db/mongo.js';
 import { errors } from '../../platform/http/errors.js';
 import { normalizeEmail } from '../../platform/email.js';
 import { normalizePhone, maskPhone } from '../../platform/phone.js';
+import { hashPassword, passwordProblem } from '../../platform/security/passwords.js';
 import type { AccountsRepository } from './accounts.repository.js';
 import {
-  NAME_RE, REGIONS, ROLE_SPACES, ROOM_RE, STUDENT_NUMBER_RE, UFR_CODES, VILLAGES,
+  CAMPUSES, NAME_RE, REGIONS, ROLE_SPACES, ROOM_RE, STUDENT_NUMBER_RE, UFR_CODES, VILLAGES,
   type AppSpace, type Audience, type AudienceProfile, type Campus, type MembershipSummary, type Region, type UfrCode, type NewStudentAccount, type NotificationPrefs, type OrganizationsPort, type PlatformRole, type StudentProfileDoc, type UserDoc,
 } from './accounts.types.js';
 
@@ -65,14 +66,51 @@ export class AccountsService {
 
   // ---- Sign-up -----------------------------------------------------------------------------------------
 
+  /**
+   * Sign-up step 1. A number whose account isn't a student's (someone given a role in a team, or on the app creator's
+   * team) is not taken: sign-up completes that account (`existingAccount`), its roles stay.
+   */
   async availability(phone: string, studentNumber: string) {
-    const [phoneTaken, numberTaken] = await Promise.all([this.repo.phoneExists(phone), this.repo.studentNumberExists(studentNumber)]);
-    return { available: !phoneTaken && !numberTaken, conflict: phoneTaken ? ('phone' as const) : numberTaken ? ('student_number' as const) : undefined };
+    const [phoneTaken, numberTaken, existing] = await Promise.all([this.repo.phoneExists(phone), this.repo.studentNumberExists(studentNumber), this.repo.findUserByPhone(phone)]);
+    const completes = !!existing && !(await this.repo.findProfileByUserId(existing._id));
+    const phoneConflict = phoneTaken && !completes;
+    return {
+      available: !phoneConflict && !numberTaken,
+      conflict: phoneConflict ? ('phone' as const) : numberTaken ? ('student_number' as const) : undefined,
+      ...(completes ? { existingAccount: true } : {}),
+    };
+  }
+
+  /** A number sign-up may use: no account, or an account that isn't a student's yet. */
+  async canRegister(phone: string) {
+    const existing = await this.repo.findUserByPhone(phone);
+    return !existing || !(await this.repo.findProfileByUserId(existing._id));
   }
 
   /** User + student profile, inside the caller's transaction. Unique indexes decide races between two sign-ups. */
-  async createStudentAccount(input: NewStudentAccount, session: ClientSession): Promise<UserDoc> {
+  async createStudentAccount(input: NewStudentAccount, session: ClientSession): Promise<UserDoc & { linked?: true }> {
     const now = this.clock.now();
+    // The number already has an account without a student profile (a team member): sign-up completes it. The code
+    // sent to the number proves it is theirs, as for "mot de passe oublié"; the name and password given now win.
+    const existing = await this.repo.findUserByPhone(input.phone, session);
+    if (existing) {
+      if (await this.repo.findProfileByUserId(existing._id, session)) throw errors.conflict('PHONE_TAKEN', 'Ce numéro a déjà un compte.');
+      const updated = await this.repo.completeAsStudent(
+        existing._id,
+        {
+          firstName: input.firstName, lastName: input.lastName, passwordHash: input.passwordHash, phoneVerifiedAt: now,
+          terms: { version: input.termsVersion, acceptedAt: now }, login: { failedCount: 0, lockedUntil: null, lastLoginAt: existing.login.lastLoginAt }, updatedAt: now,
+        },
+        session,
+      );
+      try {
+        await this.repo.insertProfile(this.newProfile(existing._id, input, now), session);
+      } catch (err) {
+        if (isDuplicateKey(err, 'student_number_unique')) throw errors.conflict('STUDENT_NUMBER_TAKEN', 'Ce numéro étudiant a déjà un compte.');
+        throw err;
+      }
+      return { ...updated!, linked: true };
+    }
     const user: UserDoc = {
       _id: this.repo.newId(),
       phone: input.phone,
@@ -92,9 +130,22 @@ export class AccountsService {
       createdAt: now,
       updatedAt: now,
     };
-    const profile: StudentProfileDoc = {
+    const profile = this.newProfile(user._id, input, now);
+    try {
+      await this.repo.insertUser(user, session);
+      await this.repo.insertProfile(profile, session);
+    } catch (err) {
+      if (isDuplicateKey(err, 'phone_unique')) throw errors.conflict('PHONE_TAKEN', 'Ce numéro a déjà un compte.');
+      if (isDuplicateKey(err, 'student_number_unique')) throw errors.conflict('STUDENT_NUMBER_TAKEN', 'Ce numéro étudiant a déjà un compte.');
+      throw err;
+    }
+    return user;
+  }
+
+  private newProfile(userId: ObjectId, input: NewStudentAccount, now: Date): StudentProfileDoc {
+    return {
       _id: this.repo.newId(),
-      userId: user._id,
+      userId,
       studentNumber: input.studentNumber,
       campus: input.campus,
       onCampus: input.onCampus,
@@ -109,26 +160,26 @@ export class AccountsService {
       createdAt: now,
       updatedAt: now,
     };
-    try {
-      await this.repo.insertUser(user, session);
-      await this.repo.insertProfile(profile, session);
-    } catch (err) {
-      if (isDuplicateKey(err, 'phone_unique')) throw errors.conflict('PHONE_TAKEN', 'Ce numéro a déjà un compte.');
-      if (isDuplicateKey(err, 'student_number_unique')) throw errors.conflict('STUDENT_NUMBER_TAKEN', 'Ce numéro étudiant a déjà un compte.');
-      throw err;
-    }
-    return user;
   }
 
   /** Accounts created by an admin (organizer staff): no student profile, no password until "mot de passe oublié". */
-  async createStaffUser(input: { phone: string; firstName: string; lastName: string }): Promise<UserDoc> {
+  /**
+   * An account created by someone else (an owner adding an employee, an admin adding a business owner or a team
+   * member). With a password, the person can sign in at once; without, they set it with "mot de passe oublié".
+   */
+  async createStaffUser(input: { phone: string; firstName: string; lastName: string; password?: string }): Promise<UserDoc> {
     const now = this.clock.now();
     const phone = this.phoneOrThrow(input.phone);
+    const password = input.password?.trim();
+    if (password) {
+      const problem = passwordProblem(password);
+      if (problem) throw errors.validation(problem, { field: 'password' });
+    }
     const user: UserDoc = {
       _id: this.repo.newId(),
       phone,
       phoneVerifiedAt: null,
-      passwordHash: null,
+      passwordHash: password ? await hashPassword(password) : null,
       firstName: this.normalizeName(input.firstName, 'firstName'),
       lastName: this.normalizeName(input.lastName, 'lastName'),
       status: 'active',
@@ -214,19 +265,38 @@ export class AccountsService {
 
   // ---- Profile -----------------------------------------------------------------------------------------
 
+  /**
+   * The spaces the app can open, in this order (the first is home): the student space, each space of each organization
+   * (Khoulé & frère · Restaurant, Khoulé & frère · Boutique…), then the platform team's spaces.
+   */
+  private spacesFrom(user: UserDoc, profile: unknown, memberships: MembershipSummary[]): AppSpace[] {
+    const spaces: AppSpace[] = [];
+    if (profile) spaces.push({ key: 'student', type: 'student', kind: null, orgId: null, name: 'Étudiant', roles: [], logoUrl: null, personal: false });
+    for (const m of memberships) {
+      const kind = m.space === 'organizer' ? null : m.space;
+      spaces.push({ key: `${m.space}:${m.orgId}`, type: kind ? 'business' : 'organizer', kind, orgId: m.orgId, name: m.name, roles: m.roles, logoUrl: m.logoUrl, personal: m.category === 'Étudiant' });
+    }
+    const admin = user.platformRoles.includes('admin');
+    for (const r of ROLE_SPACES) {
+      const roles = r.roles.filter((role) => user.platformRoles.includes(role));
+      if (admin || roles.length) spaces.push({ key: r.space, type: r.space, kind: null, orgId: null, name: r.label, roles: admin ? ['admin', ...roles] : roles, logoUrl: null, personal: false });
+    }
+    return spaces;
+  }
+
+  /** Has the account anything left to open? A removed employee with no student profile has not: they can't sign in. */
+  async hasAnySpace(userId: ObjectId) {
+    const user = await this.repo.findUserById(userId);
+    if (!user) return false;
+    const [profile, memberships] = await Promise.all([this.repo.findProfileByUserId(userId), this.organizations().membershipsForUser(userId)]);
+    return this.spacesFrom(user, profile, memberships).length > 0;
+  }
+
   async getMe(userId: ObjectId) {
     const user = await this.repo.findUserById(userId);
     if (!user) throw errors.unauthenticated();
     const [profile, memberships] = await Promise.all([this.repo.findProfileByUserId(userId), this.organizations().membershipsForUser(userId)]);
-    // In this order: the first one is where the app opens (a student stays a student, whatever their roles).
-    const spaces: AppSpace[] = [];
-    if (profile) spaces.push('student');
-    // A restaurant or shop has its own space (orders, catalog); other organizations the organizer one.
-    const isBusiness = (m: MembershipSummary) => m.capabilities.includes('restaurant') || m.capabilities.includes('shop');
-    if (memberships.some((m) => !isBusiness(m))) spaces.push('organizer');
-    if (memberships.some(isBusiness)) spaces.push('business');
-    const admin = user.platformRoles.includes('admin');
-    for (const r of ROLE_SPACES) if (admin || r.roles.some((role) => user.platformRoles.includes(role))) spaces.push(r.space);
+    const spaces = this.spacesFrom(user, profile, memberships);
     return {
       id: user._id.toHexString(),
       firstName: user.firstName,
@@ -252,7 +322,7 @@ export class AccountsService {
           }
         : null,
       spaces,
-      organizations: memberships.map((m) => ({ id: m.orgId, name: m.name, category: m.category, level: m.level, roles: m.roles, capabilities: m.capabilities })),
+      organizations: memberships.map((m) => ({ id: m.orgId, name: m.name, category: m.category, level: m.level, roles: m.roles, capabilities: m.capabilities, space: m.space })),
       payoutPhoneMasked: maskPhone(user.payoutAccount.phone),
       email: user.email ? { address: user.email.address, verified: user.email.verifiedAt !== null } : null,
       avatarUrl: user.avatar?.url ?? null,
@@ -268,11 +338,14 @@ export class AccountsService {
     };
   }
 
-  async updateResidence(userId: ObjectId, input: { onCampus: boolean; village?: string | null; room?: string | null }) {
+  /** "Informations personnelles": campus, living on campus or not, village and room. */
+  async updateResidence(userId: ObjectId, input: { campus?: Campus; onCampus: boolean; village?: string | null; room?: string | null }) {
     const profile = await this.repo.findProfileByUserId(userId);
     if (!profile) throw errors.forbidden('Réservé aux étudiants.');
-    const residence = this.residence({ campus: profile.campus, ...input });
-    await this.repo.updateProfile(userId, residence, this.clock.now());
+    const campus = input.campus ?? profile.campus;
+    if (!(CAMPUSES as readonly string[]).includes(campus)) throw errors.validation('Choisis ton campus.', { field: 'campus' });
+    const residence = this.residence({ ...input, campus });
+    await this.repo.updateProfile(userId, { campus, ...residence }, this.clock.now());
   }
 
   /** "Mon UFR et ma région" in the profile (students who signed up before they were asked, or who changed UFR). */
@@ -282,11 +355,23 @@ export class AccountsService {
     await this.repo.updateProfile(userId, this.origin(input), this.clock.now());
   }
 
-  /** Birth date, place of birth, nationality: typed, or read from the student's own card and checked by them. */
+  /** The student's own card was just read and its number is theirs: they may save their identity for a while. */
+  async markCardRead(userId: ObjectId) {
+    await this.repo.updateProfile(userId, { cardReadAt: this.clock.now() }, this.clock.now());
+  }
+
+  /**
+   * Birth date, place of birth, nationality: from the student's own card only (read and matched within 30 min; a
+   * misread can be corrected before saving). Saved once: it can't be changed afterwards.
+   */
   async updateIdentity(userId: ObjectId, input: { birthDate: string | null; birthPlace: string | null; nationality: string | null; fromCard?: boolean }) {
     const profile = await this.repo.findProfileByUserId(userId);
     if (!profile) throw errors.forbidden('Réservé aux étudiants.');
     const now = this.clock.now();
+    if (profile.identity?.source === 'card') throw errors.conflict('IDENTITY_LOCKED', 'Tes informations ont déjà été enregistrées depuis ta carte : elles ne peuvent plus être modifiées.');
+    if (!profile.cardReadAt || now.getTime() - profile.cardReadAt.getTime() > 30 * 60_000) {
+      throw errors.rule('CARD_SCAN_REQUIRED', 'Scanne d’abord ta carte étudiant : son numéro doit être le tien.');
+    }
     if (input.birthDate) {
       const d = new Date(`${input.birthDate}T00:00:00Z`);
       const age = (now.getTime() - d.getTime()) / (365.25 * 24 * 3_600_000);
@@ -297,7 +382,7 @@ export class AccountsService {
     const clean = (v: string | null) => v?.trim().replace(/\s+/g, ' ') || null;
     await this.repo.updateProfile(
       userId,
-      { identity: { birthDate: input.birthDate, birthPlace: clean(input.birthPlace), nationality: clean(input.nationality), source: input.fromCard ? 'card' : 'manual', updatedAt: now } },
+      { identity: { birthDate: input.birthDate, birthPlace: clean(input.birthPlace), nationality: clean(input.nationality), source: 'card', updatedAt: now }, cardReadAt: null },
       now,
     );
   }
@@ -350,6 +435,23 @@ export class AccountsService {
   }
 
   /** Adds or replaces the e-mail address. It starts unverified; a new address resets the verification. */
+  async changePhone(userId: ObjectId, phone: string) {
+    const user = await this.repo.findUserById(userId);
+    if (!user) throw errors.unauthenticated();
+    const now = this.clock.now();
+    try {
+      await this.repo.setPhone(userId, phone, user.payoutAccount.phone === user.phone, now);
+    } catch (err) {
+      if (isDuplicateKey(err, 'phone_unique')) throw errors.conflict('PHONE_TAKEN', 'Ce numéro a déjà un compte.');
+      throw err;
+    }
+  }
+
+  /** The profile picture (an upload of purpose `avatar`), or none. */
+  async setAvatar(userId: ObjectId, avatar: UserDoc['avatar']) {
+    await this.repo.setUserFields(userId, { avatar }, this.clock.now());
+  }
+
   async setEmail(userId: ObjectId, input: string) {
     const address = normalizeEmail(input);
     if (!address) throw errors.validation('Adresse e-mail invalide.', { field: 'email' });

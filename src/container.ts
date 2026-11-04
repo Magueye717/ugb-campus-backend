@@ -10,6 +10,7 @@ import { createPublicRestosModule, type PublicRestosApi } from './modules/public
 import { createLostModule, TesseractCardReader, type CardReader, type LostApi } from './modules/lost/index.js';
 import { createCommerceModule, type CommerceApi } from './modules/commerce/index.js';
 import { createPlacesModule, type PlacesApi } from './modules/places/index.js';
+import { createRatingsModule, type RatingsApi } from './modules/ratings/index.js';
 import { createAuditModule, type AuditApi } from './modules/audit/index.js';
 import { createIdentityModule, type IdentityApi } from './modules/identity/index.js';
 import { createOrganizationsModule, type OrganizationsApi } from './modules/organizations/index.js';
@@ -37,7 +38,7 @@ export type Container = {
   tokens: TokenService;
   denylist: SessionDenylist;
   hub: RealtimeHub;
-  modules: { audit: AuditApi; accounts: AccountsApi; organizations: OrganizationsApi; identity: IdentityApi; payments: PaymentsApi; messaging: MessagingApi; taxi: TaxiApi; ticketing: TicketingApi; caravans: CaravansApi; notifications: NotificationsApi; alerts: AlertsApi; publicRestos: PublicRestosApi; media: MediaApi; events: EventsApi; banners: BannersApi; lost: LostApi; commerce: CommerceApi; places: PlacesApi };
+  modules: { audit: AuditApi; accounts: AccountsApi; organizations: OrganizationsApi; identity: IdentityApi; payments: PaymentsApi; messaging: MessagingApi; taxi: TaxiApi; ticketing: TicketingApi; caravans: CaravansApi; notifications: NotificationsApi; alerts: AlertsApi; publicRestos: PublicRestosApi; media: MediaApi; events: EventsApi; banners: BannersApi; lost: LostApi; commerce: CommerceApi; places: PlacesApi; ratings: RatingsApi };
   close(): Promise<void>;
 };
 
@@ -56,23 +57,27 @@ export async function createContainer(config: Config, opts: { clock?: Clock; war
 
   const audit = createAuditModule(mongo.db, clock);
   // accounts needs organization memberships for /me, organizations needs accounts: the port is resolved lazily.
-  const late: { organizations?: OrganizationsApi } = {};
-  const accounts = createAccountsModule({ db: mongo.db, clock, audit, organizations: () => late.organizations! });
-  const organizations = (late.organizations = createOrganizationsModule({ db: mongo.db, clock, accounts, audit }));
+  const late: { organizations?: OrganizationsApi; notifications?: NotificationsApi; media?: MediaApi } = {};
+  const accounts = createAccountsModule({ db: mongo.db, clock, audit, organizations: () => late.organizations!, notifications: () => late.notifications!, media: () => late.media! });
+  const organizations = (late.organizations = createOrganizationsModule({ db: mongo.db, clock, accounts, audit, notifications: () => late.notifications! }));
   const identity = createIdentityModule({ db: mongo.db, mongo: mongo.client, config, clock, queues, limiter, tokens, denylist, accounts, audit });
-  const notifications = createNotificationsModule({ db: mongo.db, clock, hub, queues, accounts, config });
+  const notifications = (late.notifications = createNotificationsModule({ db: mongo.db, clock, hub, queues, accounts, config }));
   const payments = createPaymentsModule({ db: mongo.db, mongo: mongo.client, clock, config, queues, accounts, notifications });
   const messaging = createMessagingModule({ db: mongo.db, clock, hub, limiter, audit, notifications });
   const ticketing = createTicketingModule({ db: mongo.db, mongo: mongo.client, clock, tokens, accounts, organizations, payments, hub, limiter, audit, notifications });
   const caravans = createCaravansModule({ db: mongo.db, mongo: mongo.client, clock, accounts, organizations, payments, ticketing, hub, limiter, audit, notifications });
   const taxi = createTaxiModule({ db: mongo.db, mongo: mongo.client, clock, config, accounts, payments, messaging, limiter, notifications });
-  const media = createMediaModule({ db: mongo.db, clock, config, limiter });
+  const media = (late.media = createMediaModule({ db: mongo.db, clock, config, limiter }));
   const events = createEventsModule({ db: mongo.db, mongo: mongo.client, clock, accounts, organizations, payments, ticketing, media, limiter, audit, notifications });
   const banners = createBannersModule({ db: mongo.db, mongo: mongo.client, clock, payments, media, events, organizations, limiter, audit, notifications });
   const alerts = createAlertsModule({ db: mongo.db, clock, audit, notifications, accounts });
   const publicRestos = createPublicRestosModule({ db: mongo.db, clock, audit, alerts, notifications });
   const commerce = createCommerceModule({ db: mongo.db, mongo: mongo.client, clock, accounts, organizations, payments, media, notifications, limiter, audit });
   const places = createPlacesModule({ db: mongo.db, clock, media, audit });
+  const ratings = createRatingsModule({
+    db: mongo.db, clock, notifications,
+    targets: { setOrgRating: (o, a, n) => organizations.setRating(o, a, n), setBusinessRating: (b, a, n) => commerce.service.setRating(b, a, n) },
+  });
   const lost = createLostModule({
     db: mongo.db, mongo: mongo.client, clock, accounts, messaging, notifications, alerts, media, limiter, audit, reader: opts.cardReader ?? new TesseractCardReader(config.OCR_CACHE_DIR),
   });
@@ -86,7 +91,7 @@ export async function createContainer(config: Config, opts: { clock?: Clock; war
     tokens,
     denylist,
     hub,
-    modules: { audit, accounts, organizations, identity, payments, messaging, taxi, ticketing, caravans, notifications, alerts, publicRestos, media, events, banners, lost, commerce, places },
+    modules: { audit, accounts, organizations, identity, payments, messaging, taxi, ticketing, caravans, notifications, alerts, publicRestos, media, events, banners, lost, commerce, places, ratings },
     async close() {
       await lost.close();
       await hub.close();

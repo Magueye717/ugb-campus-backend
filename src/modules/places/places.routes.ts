@@ -3,14 +3,13 @@ import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fas
 import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
-import { IdParams, toObjectId } from '../../platform/http/schemas.js';
+import { IdParams, Nullable, toObjectId } from '../../platform/http/schemas.js';
 import { CAMPUSES } from '../accounts/index.js';
 import type { AuditApi } from '../audit/index.js';
 import type { PlacesService } from './places.service.js';
-import { CAMPUS_BOUNDS, CAMPUS_OUTLINE } from './places.campus.js';
+import { CAMPUS_BOUNDS, CAMPUS_OUTLINE, CAMPUS_START } from './places.campus.js';
 import { PLACE_CATEGORIES } from './places.types.js';
 
-const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
 const PlaceView = Type.Object({
   id: Type.String(),
   name: Type.String(),
@@ -61,10 +60,10 @@ export function registerPlacesRoutes(root: FastifyInstance, { service, audit, re
       schema: {
         tags,
         description: 'The UGB campus outline (from OpenStreetMap, © OpenStreetMap contributors) and its box: the map draws it and stays inside.',
-        response: { 200: Type.Object({ outline: Type.Array(Point), bounds: Type.Object({ south: Type.Number(), west: Type.Number(), north: Type.Number(), east: Type.Number() }), attribution: Type.String() }) },
+        response: { 200: Type.Object({ outline: Type.Array(Point), bounds: Type.Object({ south: Type.Number(), west: Type.Number(), north: Type.Number(), east: Type.Number() }), start: Type.Object({ lat: Type.Number(), lng: Type.Number(), delta: Type.Number() }), attribution: Type.String() }) },
       },
     },
-    async () => ({ outline: CAMPUS_OUTLINE, bounds: CAMPUS_BOUNDS, attribution: '© OpenStreetMap' }),
+    async () => ({ outline: CAMPUS_OUTLINE, bounds: CAMPUS_BOUNDS, start: CAMPUS_START, attribution: '© OpenStreetMap' }),
   );
 
   app.get('/places/:id', { preHandler: requireAuth, schema: { tags, params: IdParams, response: { 200: PlaceView } } }, async (req) => service.view(await service.get(toObjectId(req.params.id))));

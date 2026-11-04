@@ -35,7 +35,7 @@ async function setup(over: { capabilities?: ('events' | 'caravans')[]; free?: bo
   t.clock.set(T0);
   const owner = await createStaff(t);
   const org = await t.c.modules.organizations.create({ slug: `bde-${++seq}-${Date.now() % 1e6}`, name: 'BDE SAT', category: 'Amicale', capabilities: over.capabilities ?? ['events'], level: 'confirme', payoutPhone: owner.phone });
-  await t.c.modules.organizations.setMember(org._id, { phone: owner.phone, roles: ['owner'] }, null);
+  await t.c.modules.organizations.setOwner(org._id, owner.phone, null);
   const o = { userId: owner.userId.toHexString() };
   const imgs = await Promise.all([1, 2].map(async () => (await t.c.modules.media.service.upload(owner.userId, 'event', await picture(), 'http://test/api/v1'))._id.toHexString()));
   const body = {
@@ -167,7 +167,7 @@ describe('students’ events', () => {
     const draft = await ok(call(s, 'POST', '/me/events', body), 201);
     expect(draft).toMatchObject({ status: 'draft', organizer: { name: 'Awa Diop', category: 'Étudiant' } });
     // The student now owns their own organization: the organizer space (scanning, attendees).
-    expect(json(await call(s, 'GET', '/me')).spaces).toEqual(['student', 'organizer']);
+    expect(json(await call(s, 'GET', '/me')).spaces.map((x: { type: string }) => x.type)).toEqual(['student', 'organizer']);
 
     const submitted = await ok(call(s, 'POST', `/me/events/${draft.id}/submit`));
     expect(submitted.status).toBe('pending_review');
@@ -213,6 +213,8 @@ describe('students’ events', () => {
     expect((await ok(call(s, 'GET', '/notifications'))).items[0]).toMatchObject({ type: 'event.published' });
     // On the home screen of the students it targets only (the page itself opens for anyone with the link).
     expect((await ok(call(buyer, 'GET', '/events'))).items.map((e: { id: string }) => e.id)).toContain(draft.id);
+    // Students don't see the owner's name (their personal entity is named after them).
+    expect((await ok(call(buyer, 'GET', `/events/${draft.id}`))).organizer).toMatchObject({ name: '', category: 'Étudiant' });
     expect((await ok(call(elsewhere, 'GET', '/events'))).items.map((e: { id: string }) => e.id)).not.toContain(draft.id);
     expect((await ok(call(buyer, 'GET', `/events/${draft.id}`))).salesOpen).toBe(true);
 

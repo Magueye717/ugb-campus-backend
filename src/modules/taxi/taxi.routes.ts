@@ -3,12 +3,11 @@ import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fas
 import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
-import { IdParams, toObjectId } from '../../platform/http/schemas.js';
+import { IdParams, Nullable, toObjectId } from '../../platform/http/schemas.js';
 import { PAYMENT_METHODS, PaymentView, paymentView, PayoutView, payoutView } from '../payments/index.js';
 import type { TaxiService } from './taxi.service.js';
 import { TAXI_FARE, TAXI_LOCK_CHOICE, TAXI_SEATS } from './taxi.types.js';
 
-const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
 const Person = { key: Type.String(), name: Type.String(), initials: Type.String() };
 
 export const TripView = Type.Object({

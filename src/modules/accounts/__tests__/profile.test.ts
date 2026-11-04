@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { bearer, createTestApp, json, registerStudent, type TestApp } from '../../../../test/harness.js';
+import { bearer, createTestApp, json, nextPhone, registerStudent, type TestApp } from '../../../../test/harness.js';
+import { multipart, picture } from '../../../../test/upload.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -94,5 +95,33 @@ describe('current location', () => {
 
   it('requires a signed-in user', async () => {
     expect((await t.app.inject({ method: 'PUT', url: '/api/v1/me/location', payload: { lat: 16, lng: -16 } })).statusCode).toBe(401);
+  });
+});
+
+describe('phone number and picture', () => {
+  it('a new number, proven by its code, replaces the old one for signing in', async () => {
+    const s = await registerStudent(t);
+    const other = await registerStudent(t);
+    const post = (url: string, payload: object) => t.app.inject({ method: 'POST', url: `/api/v1${url}`, payload });
+    // A number that already has an account gets no code.
+    expect(json(await post('/auth/otp', { phone: other.phone, purpose: 'change_phone' })).code).toBe('PHONE_TAKEN');
+    const phone = nextPhone();
+    const { challengeId } = json(await post('/auth/otp', { phone, purpose: 'change_phone' }));
+    const { verificationToken } = json(await post(`/auth/otp/${challengeId}/verify`, { code: '1234' }));
+    expect((await call('PUT', '/me/phone', s.tokens.accessToken, { verificationToken })).statusCode).toBe(204);
+    expect((await post('/auth/login', { identifier: phone, password: 'Bonjour2026' })).statusCode).toBe(200);
+    expect(json(await post('/auth/login', { identifier: s.phone, password: 'Bonjour2026' })).code).toBe('ACCOUNT_NOT_FOUND');
+    // A code is used once.
+    expect((await call('PUT', '/me/phone', s.tokens.accessToken, { verificationToken })).statusCode).not.toBe(204);
+  });
+
+  it('a profile picture: an upload, then removed', async () => {
+    const s = await registerStudent(t);
+    const up = multipart(await picture());
+    const photo = json(await t.app.inject({ method: 'POST', url: '/api/v1/media/images?purpose=avatar', headers: { ...bearer(s.tokens.accessToken), ...up.headers }, payload: up.payload }));
+    expect((await call('PUT', '/me/avatar', s.tokens.accessToken, { photoId: photo.id })).statusCode).toBe(204);
+    expect(json(await call('GET', '/me', s.tokens.accessToken)).avatarUrl).toMatch(/\.webp$/);
+    expect((await call('PUT', '/me/avatar', s.tokens.accessToken, { photoId: null })).statusCode).toBe(204);
+    expect(json(await call('GET', '/me', s.tokens.accessToken)).avatarUrl).toBeNull();
   });
 });

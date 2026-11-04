@@ -7,7 +7,8 @@ import { randomCode } from '../../platform/security/crypto.js';
 import type { Campus } from '../accounts/index.js';
 import type { AlertsApi } from '../alerts/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
-import { MEAL_LABELS, MEALS, type Dish, type DishInput, type DishStatus, type Meal, type PublicMenuDoc, type PublicRestoDoc, type Service } from './public-restos.types.js';
+import { MEAL_LABELS, MEALS, type Dish, type DishInput, type DishStatus, type Meal, type PublicDishDoc, type PublicMenuDoc, type PublicRestoDoc, type Service } from './public-restos.types.js';
+import { dishKey } from './public-restos.collections.js';
 
 const MIN = 60_000;
 /** Where students see the menus: the "Restos publics" tab. */
@@ -24,6 +25,7 @@ export const DEFAULT_SERVICES: Record<Meal, Service> = { lunch: { start: '12:00'
 
 const dishView = (d: Dish) => ({ id: d.dishId, name: d.name, detail: d.detail, status: d.status, statusAt: d.statusAt.toISOString() });
 export const menuView = (m: PublicMenuDoc) => ({ id: m._id.toHexString(), restoId: m.restoId.toHexString(), date: m.date, meal: m.meal, dishes: m.dishes.map(dishView), updatedAt: m.updatedAt.toISOString() });
+export const catalogueView = (d: PublicDishDoc) => ({ id: d._id.toHexString(), name: d.name, detail: d.detail, meals: d.meals, uses: d.uses });
 export const restoView = (r: PublicRestoDoc) => ({ id: r._id.toHexString(), slug: r.slug, name: r.name, location: r.location, campus: r.campus, coords: r.point ?? null, sortOrder: r.sortOrder, services: r.services, status: r.status });
 
 export type RestoInput = { slug: string; name: string; location?: string; campus?: Campus | null; coords?: { lat: number; lng: number } | null; sortOrder?: number; services?: Partial<Record<Meal, Service>> };
@@ -31,6 +33,7 @@ export type RestoInput = { slug: string; name: string; location?: string; campus
 export class PublicRestosService {
   private readonly restos: Collection<PublicRestoDoc>;
   private readonly menus: Collection<PublicMenuDoc>;
+  private readonly dishes: Collection<PublicDishDoc>;
 
   constructor(
     db: Db,
@@ -40,6 +43,7 @@ export class PublicRestosService {
   ) {
     this.restos = db.collection('publicRestos');
     this.menus = db.collection('publicMenus');
+    this.dishes = db.collection('publicDishes');
   }
 
   // ---- Students ------------------------------------------------------------------------------------------------
@@ -144,7 +148,31 @@ export class PublicRestosService {
     // Alerts follow the new menu: removed dishes and dishes back in stock leave the home screen, new ruptures appear.
     for (const old of before?.dishes ?? []) if (old.status === 'out' && !dishes.some((d) => d.dishId === old.dishId && d.status === 'out')) await this.alerts.clear(this.alertKey(menu, old.dishId));
     for (const d of dishes) if (d.status === 'out' && before?.dishes.find((x) => x.dishId === d.dishId)?.status !== 'out') await this.soldOut(resto, menu, d, false);
+    // Every dish served joins the catalogue (a new one typed by hand is offered next time); counted once per menu.
+    const had = new Set(before?.dishes.map((d) => dishKey(d.name)));
+    for (const d of dishes) {
+      const key = dishKey(d.name);
+      await this.dishes.updateOne(
+        { key },
+        { $setOnInsert: { _id: new ObjectId(), key, createdAt: now }, $set: { name: d.name, detail: d.detail, updatedAt: now }, $addToSet: { meals: meal }, $inc: { uses: had.has(key) ? 0 : 1 } },
+        { upsert: true },
+      );
+    }
     return menu;
+  }
+
+  // ---- Catering staff: the dish catalogue ----------------------------------------------------------------------
+
+  /** The dishes to pick from: those of this meal first, then the most served. */
+  async catalogue(meal?: Meal) {
+    const all = await this.dishes.find({}).sort({ uses: -1, name: 1 }).toArray();
+    return meal ? [...all.filter((d) => d.meals.includes(meal)), ...all.filter((d) => !d.meals.includes(meal))] : all;
+  }
+
+  /** A dish typed with a mistake, or no longer served: out of the suggestions (published menus keep it). */
+  async removeFromCatalogue(id: ObjectId) {
+    const r = await this.dishes.deleteOne({ _id: id });
+    if (!r.deletedCount) throw errors.notFound('Plat introuvable.');
   }
 
   async deleteMenu(restoId: ObjectId, date: string, meal: Meal) {

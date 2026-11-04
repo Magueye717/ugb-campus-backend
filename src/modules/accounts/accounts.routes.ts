@@ -1,22 +1,25 @@
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import type { FastifyInstance, preHandlerHookHandler } from 'fastify';
+import type { ObjectId } from 'mongodb';
 import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
-import { IdParams, toObjectId } from '../../platform/http/schemas.js';
+import { IdParams, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
 import type { AuditApi } from '../audit/index.js';
 import type { AccountsService } from './accounts.service.js';
 import { CreateStaffUserBody, EmailBody, IdentityBody, LocationBody, MeResponse, NotificationPrefsSchema, OriginBody, PlatformRolesBody, ResidenceBody, StudentReference } from './accounts.schemas.js';
-import { CAMPUS_LABELS, CAMPUSES, REGIONS, UFRS, VILLAGES } from './accounts.types.js';
+import { CAMPUS_LABELS, CAMPUSES, REGIONS, UFRS, VILLAGES, type UserDoc } from './accounts.types.js';
 
 type Deps = {
   service: AccountsService;
   audit: AuditApi;
   requireStudent: preHandlerHookHandler;
+  /** An upload (purpose avatar) becomes the user's: its stored reference. */
+  claimImage: (userId: ObjectId, mediaId: string) => Promise<NonNullable<UserDoc['avatar']>>;
   requireAdmin: preHandlerHookHandler;
 };
 
-export function registerAccountsRoutes(root: FastifyInstance, { service, audit, requireStudent, requireAdmin }: Deps) {
+export function registerAccountsRoutes(root: FastifyInstance, { service, audit, requireStudent, requireAdmin, claimImage }: Deps) {
   const app = root.withTypeProvider<TypeBoxTypeProvider>();
   const me = (req: Parameters<typeof actorOf>[0]) => toObjectId(actorOf(req).userId);
 
@@ -60,6 +63,15 @@ export function registerAccountsRoutes(root: FastifyInstance, { service, audit, 
 
   // Keyed by user, not IP: a campus Wi-Fi shares one IP between thousands of students.
   const perUser = (max: number, timeWindow: string) => ({ rateLimit: { max, timeWindow, hook: 'preHandler' as const, keyGenerator: (r: { actor: { userId: string } | null; ip: string }) => r.actor?.userId ?? r.ip } });
+
+  app.put(
+    '/me/avatar',
+    { preHandler: requireAuth, config: perUser(20, '1 hour'), schema: { tags: ['me'], description: 'The profile picture: an upload (purpose avatar), or null to remove it.', body: Type.Object({ photoId: Type.Union([Type.Null(), ObjectIdString]) }, { additionalProperties: false }) } },
+    async (req, reply) => {
+      await service.setAvatar(me(req), req.body.photoId ? await claimImage(me(req), req.body.photoId) : null);
+      return reply.status(204).send();
+    },
+  );
 
   app.put('/me/email', { preHandler: requireAuth, config: perUser(10, '1 hour'), schema: { tags: ['me'], body: EmailBody } }, async (req, reply) => {
     await service.setEmail(me(req), req.body.email);

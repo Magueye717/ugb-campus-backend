@@ -80,6 +80,15 @@ export function registerIdentityRoutes(root: FastifyInstance, { auth, otp, rateS
     return reply.status(204).send();
   });
 
+  app.put(
+    '/me/phone',
+    { preHandler: requireAuth, config: perIp(10, '1 hour'), schema: { tags, description: 'After POST /auth/otp (purpose change_phone) to the new number and its verification.', body: Type.Object({ verificationToken: Type.String({ minLength: 10, maxLength: 2000 }) }, { additionalProperties: false }) } },
+    async (req, reply) => {
+      await auth.changePhone(toObjectId(actorOf(req).userId), req.body.verificationToken, ctx(req));
+      return reply.status(204).send();
+    },
+  );
+
   app.put('/auth/password', { preHandler: requireAuth, config: perIp(10, '1 hour'), schema: { tags, body: ChangePasswordBody } }, async (req, reply) => {
     const actor = actorOf(req);
     await auth.changePassword(toObjectId(actor.userId), actor.sessionId, req.body, ctx(req));

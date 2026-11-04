@@ -8,6 +8,9 @@ const EnvSchema = Type.Object({
   HOST: Type.String({ default: '0.0.0.0' }),
   PORT: Type.Number({ default: 3000 }),
   LOG_LEVEL: Type.String({ default: 'info' }),
+  // "Aide & support" in the app: who students call, message or write to.
+  SUPPORT_PHONE: Type.String({ default: '777902880' }),
+  SUPPORT_EMAIL: Type.String({ default: 'ugb.campus@gmail.com' }),
   /** Behind a reverse proxy: trust X-Forwarded-For so rate limits see the real client IP. */
   TRUST_PROXY: Bool,
   /**

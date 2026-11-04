@@ -345,23 +345,14 @@ export class LostService {
     } catch {
       throw errors.validation('Impossible de lire cette photo. Réessaie bien à plat, avec de la lumière.', { field: 'file' });
     }
-    const { cardType, studentNumber, names } = parseCard(text);
+    const { cardType, studentNumber } = parseCard(text);
     if (cardType && cardType !== 'student') throw errors.conflict('NOT_STUDENT_CARD', 'Ce n’est pas une carte étudiant : photographie ta carte de l’UGB.');
-    const me = await this.me(userId);
-    let matched: 'number' | 'name' | null = null;
-    if (studentNumber) {
-      const owner = await this.accounts.studentByNumber(studentNumber);
-      if (owner && !owner.userId.equals(userId)) throw errors.conflict('NOT_YOUR_CARD', 'Cette carte n’est pas la tienne : le numéro appartient à un autre étudiant.');
-      if (owner) matched = 'number';
-    }
-    if (!matched) {
-      const fold = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
-      const read = names.map(fold);
-      const mine = (s: string) => s.split(/[\s'-]+/).map(fold).some((w) => read.includes(w));
-      if (mine(me.firstName) && mine(me.lastName)) matched = 'name';
-    }
-    if (!matched) throw errors.conflict('NOT_YOUR_CARD', 'On n’a pas reconnu ta carte (ni ton numéro, ni ton nom). Réessaie avec une photo plus nette, ou saisis tes informations.');
-    return { matched, studentNumber, ...parseIdentity(text, this.clock.now()) };
+    // The card's student number must be the student's own: then (only then) its details can fill their profile.
+    if (!studentNumber) throw errors.validation('Numéro étudiant illisible : reprends la photo bien à plat, avec de la lumière.', { field: 'file' });
+    const owner = await this.accounts.studentByNumber(studentNumber);
+    if (!owner || !owner.userId.equals(userId)) throw errors.conflict('NOT_YOUR_CARD', `Cette carte (${studentNumber}) n’est pas la tienne : photographie ta propre carte étudiant.`);
+    await this.accounts.markCardRead(userId);
+    return { matched: 'number' as const, studentNumber, ...parseIdentity(text, this.clock.now()) };
   }
 
   /** Typed number: "P232055", "p 232 055". */

@@ -1,5 +1,5 @@
 import type { FastifyInstance, preHandlerHookHandler } from 'fastify';
-import type { Db } from 'mongodb';
+import type { Db, ObjectId } from 'mongodb';
 
 import type { Clock } from '../../platform/clock.js';
 import type { AlertsApi } from '../alerts/index.js';
@@ -12,7 +12,8 @@ import { PublicRestosService } from './public-restos.service.js';
 export { publicRestosCollections, publicRestosMigrations };
 
 export type PublicRestosApi = {
-  registerRoutes(app: FastifyInstance, requireStaff: preHandlerHookHandler): void;
+  /** requireStaff: menu publishers (each on their restaurants, `restosOf`); requireAdmin: creating and editing the restaurants. */
+  registerRoutes(app: FastifyInstance, guards: { requireStaff: preHandlerHookHandler; requireAdmin: preHandlerHookHandler; restosOf: (userId: ObjectId) => Promise<ObjectId[] | null> }): void;
   /** Tests and the seed. */
   service: PublicRestosService;
 };
@@ -20,7 +21,7 @@ export type PublicRestosApi = {
 export function createPublicRestosModule(d: { db: Db; clock: Clock; audit: AuditApi; alerts: AlertsApi; notifications: NotificationsApi }): PublicRestosApi {
   const service = new PublicRestosService(d.db, d.clock, d.alerts, d.notifications);
   return {
-    registerRoutes: (app, requireStaff) => registerPublicRestosRoutes(app, { service, audit: d.audit, requireStaff }),
+    registerRoutes: (app, guards) => registerPublicRestosRoutes(app, { service, audit: d.audit, ...guards }),
     service,
   };
 }

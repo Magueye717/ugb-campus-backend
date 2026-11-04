@@ -1,15 +1,16 @@
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fastify';
+import type { ObjectId } from 'mongodb';
 import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
-import { IdParams, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
+import { errors } from '../../platform/http/errors.js';
+import { IdParams, Nullable, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
 import { CAMPUSES } from '../accounts/index.js';
 import type { AuditApi } from '../audit/index.js';
-import { menuView, restoView, type PublicRestosService } from './public-restos.service.js';
+import { catalogueView, menuView, restoView, type PublicRestosService } from './public-restos.service.js';
 import { DISH_STATUSES, MEALS } from './public-restos.types.js';
 
-const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
 const HM = Type.String({ pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$', description: 'Local time HH:MM (Dakar).' });
 const Service = Type.Object({ start: HM, end: HM }, { additionalProperties: false });
 const Services = Type.Object({ lunch: Service, dinner: Service });
@@ -41,12 +42,19 @@ const DishInput = Type.Object(
   { additionalProperties: false },
 );
 
-type Deps = { service: PublicRestosService; audit: AuditApi; requireStaff: preHandlerHookHandler };
+type Deps = { service: PublicRestosService; audit: AuditApi; requireStaff: preHandlerHookHandler; requireAdmin: preHandlerHookHandler; restosOf: (userId: ObjectId) => Promise<ObjectId[] | null> };
 
-export function registerPublicRestosRoutes(root: FastifyInstance, { service, audit, requireStaff }: Deps) {
+export function registerPublicRestosRoutes(root: FastifyInstance, { service, audit, requireStaff, requireAdmin, restosOf }: Deps) {
   const app = root.withTypeProvider<TypeBoxTypeProvider>();
   const tags = ['public-restos'];
-  const staff = { preHandler: [requireAuth, requireStaff] };
+  const admins = { preHandler: [requireAuth, requireAdmin] };
+  // A menu publisher only works on the restaurants the super admin assigned to them (404 for the others).
+  const ownResto: preHandlerHookHandler = async (req) => {
+    const mine = await restosOf(toObjectId(actorOf(req).userId));
+    const id = (req.params as { id?: string }).id;
+    if (mine && id && !mine.some((r) => r.toHexString() === id)) throw errors.notFound('Restaurant introuvable.');
+  };
+  const staff = { preHandler: [requireAuth, requireStaff, ownResto] };
   const me = (req: FastifyRequest) => toObjectId(actorOf(req).userId);
   const trace = (req: FastifyRequest, action: string, id: string, metadata?: Record<string, unknown>) =>
     audit.record({ actor: { type: 'user', id: actorOf(req).userId }, action, target: { type: 'public_resto', id }, requestId: req.id, ...(metadata ? { metadata } : {}) });
@@ -64,14 +72,15 @@ export function registerPublicRestosRoutes(root: FastifyInstance, { service, aud
 
   // ---- Catering staff (back office; Swagger meanwhile) ---------------------------------------------------------
 
-  app.get('/admin/public-restos', { ...staff, schema: { tags, response: { 200: Type.Object({ items: Type.Array(RestoView) }) } } }, async () => ({
-    items: (await service.listRestos()).map(restoView),
-  }));
+  app.get('/admin/public-restos', { ...staff, schema: { tags, description: 'Admins: every restaurant. Menu publishers: theirs.', response: { 200: Type.Object({ items: Type.Array(RestoView) }) } } }, async (req) => {
+    const mine = await restosOf(me(req));
+    return { items: (await service.listRestos()).filter((r) => !mine || mine.some((id) => id.equals(r._id))).map(restoView) };
+  });
 
   app.post(
     '/admin/public-restos',
     {
-      ...staff,
+      ...admins,
       schema: {
         tags,
         body: Type.Object(
@@ -99,7 +108,7 @@ export function registerPublicRestosRoutes(root: FastifyInstance, { service, aud
   app.patch(
     '/admin/public-restos/:id',
     {
-      ...staff,
+      ...admins,
       schema: {
         tags,
         params: IdParams,
@@ -124,6 +133,27 @@ export function registerPublicRestosRoutes(root: FastifyInstance, { service, aud
       return restoView(r);
     },
   );
+
+  // The dishes to pick from when composing a menu (outside /public-restos/:id: not tied to one restaurant).
+  app.get(
+    '/admin/public-dishes',
+    {
+      preHandler: [requireAuth, requireStaff],
+      schema: {
+        tags,
+        description: 'The usual dishes and every dish already published, most served first (those of `meal` first). Publishing a menu adds its new dishes.',
+        querystring: Type.Object({ meal: Type.Optional(Type.Enum(MEALS)) }, { additionalProperties: false }),
+        response: { 200: Type.Object({ items: Type.Array(Type.Object({ id: Type.String(), name: Type.String(), detail: Type.String(), meals: Type.Array(Type.String()), uses: Type.Number() })) }) },
+      },
+    },
+    async (req) => ({ items: (await service.catalogue(req.query.meal)).map(catalogueView) }),
+  );
+
+  app.delete('/admin/public-dishes/:id', { preHandler: [requireAuth, requireStaff], schema: { tags, description: 'Out of the suggestions (a typo…); published menus keep it.', params: IdParams } }, async (req, reply) => {
+    await service.removeFromCatalogue(toObjectId(req.params.id));
+    await audit.record({ actor: { type: 'user', id: actorOf(req).userId }, action: 'public_dish.remove', target: { type: 'public_dish', id: req.params.id }, requestId: req.id });
+    return reply.status(204).send();
+  });
 
   app.get(
     '/admin/public-restos/:id/menus',

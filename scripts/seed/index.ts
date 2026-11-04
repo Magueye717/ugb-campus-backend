@@ -11,7 +11,7 @@ import { networkInterfaces } from 'node:os';
 import { ObjectId } from 'mongodb';
 import sharp from 'sharp';
 
-import { bannerPackages, businesses, campusPlaces, demoAds, demoPictures, DEMO_PASSWORD, departures, organizations, publicRestos, retiredPlaces, seedAlerts, staff, students, taxiTrips, vehicles } from './data.js';
+import { bannerPackages, businesses, campusPlaces, demoAds, demoPictures, DEMO_PASSWORD, departures, organizations, publicRestos, restoAssignments, retiredPlaces, seedAlerts, staff, students, taxiTrips, vehicles } from './data.js';
 
 // Development data mirroring ugb-campus/constants/data.ts. Idempotent; refuses to run against production.
 const config = loadConfig();
@@ -47,7 +47,7 @@ try {
     }
     // Demo accounts created before UFR and region were asked at sign-up.
     await c.mongo.db.collection('studentProfiles').updateOne({ userId: user._id, ufr: null }, { $set: { ufr: s.ufr, region: s.region } });
-    for (const m of s.memberships ?? []) await orgs.setMember(orgIds.get(m.org)!, { phone, roles: m.roles }, null);
+    for (const m of s.memberships ?? []) await (m.roles.includes('owner') ? orgs.setOwner(orgIds.get(m.org)!, phone, null) : orgs.setMember(orgIds.get(m.org)!, 'organizer', { phone, roles: m.roles }, null));
     if (s.platformRoles) await accounts.setPlatformRoles(user._id, s.platformRoles);
     log(`${s.firstName} ${s.lastName} · ${s.phone} · ${s.studentNumber} · UFR ${s.ufr} · ${s.region}${s.memberships ? ` · ${s.memberships.map((m) => `${m.org}:${m.roles.join('+')}`).join(', ')}` : ''}${s.platformRoles ? ` · ${s.platformRoles.join('+')}` : ''}`);
   }
@@ -61,7 +61,7 @@ try {
       await accounts.setPassword(user._id, passwordHash);
     }
     if (s.platformRoles) await accounts.setPlatformRoles(user._id, s.platformRoles);
-    for (const m of s.memberships ?? []) await orgs.setMember(orgIds.get(m.org)!, { phone, roles: m.roles }, null);
+    for (const m of s.memberships ?? []) await (m.roles.includes('owner') ? orgs.setOwner(orgIds.get(m.org)!, phone, null) : orgs.setMember(orgIds.get(m.org)!, 'organizer', { phone, roles: m.roles }, null));
     log(`${s.firstName} ${s.lastName} · ${s.phone}${s.platformRoles ? ` · ${s.platformRoles.join('+')}` : ''}${s.memberships ? ` · ${s.memberships.map((m) => `${m.org}:${m.roles.join('+')}`).join(', ')}` : ''}`);
   }
 
@@ -87,6 +87,14 @@ try {
         }
       }
       log(`${r.name}: ${added} menus added`);
+    }
+    // Each menu publisher works on the restaurants the super admin gave them.
+    const bySlug = new Map((await svc.listRestos()).map((r) => [r.slug, r._id]));
+    for (const [phone, slugs] of Object.entries(restoAssignments)) {
+      const u = await accounts.findByPhone(normalizePhone(phone)!);
+      if (!u) continue;
+      await c.mongo.db.collection('users').updateOne({ _id: u._id }, { $set: { restoIds: slugs.map((s) => bySlug.get(s)).filter(Boolean) } });
+      log(`${u.firstName} ${u.lastName} publishes the menus of ${slugs.join(', ')}`);
     }
   }
 
@@ -225,12 +233,12 @@ try {
           log(`${biz.name}: already there`);
           continue;
         }
-        const created = await commerce.create({ kind: biz.kind, name: biz.name, specialty: biz.specialty, owner: biz.owner, address: biz.address, campus: biz.campus, location: biz.location, services: biz.services, deliveryFee: biz.deliveryFee });
+        const created = await commerce.create({ kind: biz.kind, name: biz.name, specialties: biz.specialties, owner: biz.owner, address: biz.address, campus: biz.campus, location: biz.location, services: biz.services, deliveryFees: biz.deliveryFees });
         const owner = (await accounts.findByPhone(normalizePhone(biz.owner.phone)!))!;
         await accounts.setPassword(owner._id, passwordHash);
         const photo = await c.modules.media.service.upload(owner._id, 'business', await cover(biz.colors), apiBase);
-        await commerce.update(created.orgId, owner._id, { photoId: photo._id.toHexString(), description: biz.description });
-        for (const [i, item] of biz.items.entries()) await commerce.addItem(created.orgId, owner._id, { ...item, sortOrder: i });
+        await commerce.update({ orgId: created.orgId, kind: created.kind }, owner._id, { photoId: photo._id.toHexString(), description: biz.description });
+        for (const [i, item] of biz.items.entries()) await commerce.addItem({ orgId: created.orgId, kind: created.kind }, owner._id, { ...item, sortOrder: i });
         log(`${biz.kind === 'restaurant' ? 'Resto' : 'Boutique'} ${biz.name} · owner ${biz.owner.firstName} ${biz.owner.phone} · ${biz.items.length} items`);
       }
     }

@@ -104,7 +104,7 @@ describe('event banners', () => {
     t.clock.set(T0);
     const owner = await createStaff(t);
     const org = await t.c.modules.organizations.create({ slug: `bde-banner-${Date.now() % 1e6}`, name: 'BDE SJP', category: 'Amicale', capabilities: ['events'], level: 'confirme', payoutPhone: owner.phone });
-    await t.c.modules.organizations.setMember(org._id, { phone: owner.phone, roles: ['owner'] }, null);
+    await t.c.modules.organizations.setOwner(org._id, owner.phone, null);
     const o = { userId: owner.userId.toHexString() };
     const [cover, second] = await Promise.all([1, 2].map(async () => (await t.c.modules.media.service.upload(owner.userId, 'event', await picture(), 'http://test/api/v1'))._id.toHexString()));
     const ev = await ok(

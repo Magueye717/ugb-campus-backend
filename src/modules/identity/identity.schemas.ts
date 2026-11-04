@@ -4,7 +4,7 @@ import { ObjectIdString, PhoneInput } from '../../platform/http/schemas.js';
 import { CampusSchema, RegionInput, UfrInput } from '../accounts/index.js';
 
 const Channel = Type.Union([Type.Literal('sms'), Type.Literal('whatsapp'), Type.Literal('email')]);
-const Purpose = Type.Union([Type.Literal('register'), Type.Literal('reset_password')]);
+const Purpose = Type.Union([Type.Literal('register'), Type.Literal('reset_password'), Type.Literal('change_phone')]);
 const Password = Type.String({ minLength: 1, maxLength: 200 });
 const Device = Type.Object(
   { id: Type.Optional(Type.String({ maxLength: 100 })), platform: Type.Optional(Type.String({ maxLength: 20 })), appVersion: Type.Optional(Type.String({ maxLength: 20 })) },
@@ -22,6 +22,8 @@ export const CheckBody = Type.Object({ phone: PhoneInput, studentNumber: Type.St
 export const CheckResponse = Type.Object({
   available: Type.Boolean(),
   conflict: Type.Optional(Type.Union([Type.Literal('phone'), Type.Literal('student_number')])),
+  /** The number has an account that isn't a student's (a team member): sign-up completes it, its roles stay. */
+  existingAccount: Type.Optional(Type.Boolean()),
 });
 
 export const OtpBody = Type.Object({ phone: PhoneInput, purpose: Purpose, channel: Type.Optional(Channel) }, { additionalProperties: false });

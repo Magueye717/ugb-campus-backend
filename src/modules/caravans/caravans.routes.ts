@@ -3,14 +3,13 @@ import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fas
 import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
-import { IdParams, ObjectIdString, PhoneInput, toObjectId } from '../../platform/http/schemas.js';
+import { IdParams, Nullable, ObjectIdString, PhoneInput, toObjectId } from '../../platform/http/schemas.js';
 import type { AuditApi } from '../audit/index.js';
 import type { OrgRole } from '../organizations/index.js';
 import { PAYMENT_METHODS, PaymentView, paymentView, PayoutView, payoutView } from '../payments/index.js';
 import type { CaravansService } from './caravans.service.js';
 import { DIRECTIONS, MAX_SEATS_PER_STUDENT } from './caravans.types.js';
 
-const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
 const StopView = Type.Object({ stopId: Type.String(), place: Type.String(), at: Type.String() });
 const Organizer = Type.Object({ id: Type.String(), slug: Type.String(), name: Type.String(), category: Type.String(), level: Type.String(), rating: Nullable(Type.Number()), trips: Type.Number(), logoUrl: Nullable(Type.String()) });
 
@@ -27,6 +26,7 @@ const Base = {
   dropoffs: Type.Array(StopView),
   price: Type.Number(),
   maxSeatsPerStudent: Type.Number({ description: 'Seats one student can buy here: their own + companions (2 by default).' }),
+  paymentMethods: Type.Array(Type.String(), { description: 'The providers accepted for this trip.' }),
   totalSeats: Type.Number(),
   seatsFree: Type.Number(),
   seatsBooked: Type.Number({ description: 'Paid seats: what the minimum is measured on.' }),
@@ -110,6 +110,7 @@ const DepartureInput = Type.Object(
     dropoffs: Type.Array(StopInput, { minItems: 1, maxItems: 15 }),
     price: Type.Integer({ minimum: 100, maximum: 100_000 }),
     maxSeatsPerStudent: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEATS_PER_STUDENT, description: 'Seats one student can buy (own + companions). Default 2.' })),
+    paymentMethods: Type.Optional(Type.Array(Type.Enum(PAYMENT_METHODS), { minItems: 1, maxItems: PAYMENT_METHODS.length, description: 'Wave, Orange Money or both (default: both).' })),
     minPassengers: Type.Integer({ minimum: 0, maximum: 90 }),
     confirmBy: Type.Optional(Type.String({ format: 'date-time', description: 'Default: 24 h before departure.' })),
     bookingClosesAt: Type.Optional(Type.String({ format: 'date-time', description: 'Default: 30 min before departure.' })),
@@ -125,7 +126,7 @@ type Deps = {
   service: CaravansService;
   audit: AuditApi;
   requireStudent: preHandlerHookHandler;
-  requireOrgRole: (roles: OrgRole[]) => preHandlerHookHandler;
+  requireOrgRole: (roles: OrgRole[], space?: 'organizer') => preHandlerHookHandler;
 };
 
 const baseUrlOf = (req: FastifyRequest) => `${req.protocol}://${req.host}`;
@@ -135,7 +136,7 @@ export function registerCaravansRoutes(root: FastifyInstance, { service, audit, 
   const me = (req: FastifyRequest) => toObjectId(actorOf(req).userId);
   const student = { preHandler: [requireAuth, requireStudent] };
   const tags = ['caravans'];
-  const org = (roles: OrgRole[]) => ({ preHandler: [requireAuth, requireOrgRole(roles)] });
+  const org = (roles: OrgRole[]) => ({ preHandler: [requireAuth, requireOrgRole(roles, 'organizer')] });
   const crew: OrgRole[] = ['owner', 'manager', 'scanner'];
   const managers: OrgRole[] = ['owner', 'manager'];
   const orgTags = ['organizer'];

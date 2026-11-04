@@ -3,11 +3,10 @@ import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fas
 import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
-import { IdParams, ObjectIdString, PhoneInput, toObjectId } from '../../platform/http/schemas.js';
+import { IdParams, Nullable, ObjectIdString, PhoneInput, toObjectId } from '../../platform/http/schemas.js';
 import type { AuditApi } from '../audit/index.js';
 import type { TicketingService } from './ticketing.service.js';
 
-const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
 const Free = Type.Record(Type.String(), Type.Unknown(), { description: 'Kind-specific (caravan: pickup, dropoff, vehicle, departure state).' });
 
 export const EventSummaryView = Type.Object({
@@ -89,7 +88,7 @@ const ScanBody = Type.Object(
   { additionalProperties: false },
 );
 
-type Deps = { service: TicketingService; audit: AuditApi; requireOrgRole: (roles: ('owner' | 'manager' | 'scanner' | 'staff')[]) => preHandlerHookHandler };
+type Deps = { service: TicketingService; audit: AuditApi; requireOrgRole: (roles: ('owner' | 'manager' | 'scanner' | 'staff')[], space?: 'organizer') => preHandlerHookHandler };
 
 export function registerTicketingRoutes(root: FastifyInstance, { service, audit, requireOrgRole }: Deps) {
   const app = root.withTypeProvider<TypeBoxTypeProvider>();
@@ -158,7 +157,7 @@ export function registerTicketingRoutes(root: FastifyInstance, { service, audit,
 
   // ---- Organizer: scanning ------------------------------------------------------------------------------------
 
-  const scanners = { preHandler: [requireAuth, requireOrgRole(['owner', 'manager', 'scanner'])] };
+  const scanners = { preHandler: [requireAuth, requireOrgRole(['owner', 'manager', 'scanner'], 'organizer')] };
   const OrgParams = Type.Object({ orgId: ObjectIdString }, { additionalProperties: false });
 
   // "Faire monter": a QR code, a typed code, or a ticket ticked in the passenger list (manual).

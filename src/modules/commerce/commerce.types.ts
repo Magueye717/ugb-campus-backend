@@ -2,11 +2,34 @@ import type { ObjectId } from 'mongodb';
 
 import type { ImageRef } from '../../platform/media.js';
 import type { Campus } from '../accounts/index.js';
-import type { PaymentMethod } from '../payments/index.js';
+import { PAYMENT_METHODS } from '../payments/index.js';
 
 /** A private restaurant (menus, drinks) or a shop (articles), run by an organization with that capability. */
 export const BUSINESS_KINDS = ['restaurant', 'shop'] as const;
 export type BusinessKind = (typeof BUSINESS_KINDS)[number];
+
+/** Where a business delivers, each with its own price: campus 1, campus 2, outside the campus. */
+export const DELIVERY_ZONES = ['campus1', 'campus2', 'outside'] as const;
+export type DeliveryZone = (typeof DELIVERY_ZONES)[number];
+export const DELIVERY_ZONE_LABELS: Record<DeliveryZone, string> = { campus1: 'Campus 1', campus2: 'Campus 2', outside: 'Hors campus' };
+/** FCFA per zone (0: free); null: no delivery there. All null: pickup only. */
+export type DeliveryFees = Record<DeliveryZone, number | null>;
+
+/** How an order is paid: in cash (to the business, no online payment) or online. */
+export const ORDER_PAYMENT_METHODS = ['cash', ...PAYMENT_METHODS] as const;
+export type OrderPaymentMethod = (typeof ORDER_PAYMENT_METHODS)[number];
+export const ORDER_PAYMENT_LABELS: Record<OrderPaymentMethod, string> = { cash: 'Espèces', wave: 'Wave', orange_money: 'Orange Money' };
+/** A business's methods until its owner changes them: online only (cash is the owner's choice). */
+export const DEFAULT_PAYMENT_METHODS: OrderPaymentMethod[] = ['wave', 'orange_money'];
+
+/** A business has one to MAX_SPECIALTIES of these (shown joined: "Sénégalais · Grillades"). */
+export const MAX_SPECIALTIES = 4;
+
+/** What a business may call its specialty: picked from these lists (the app reads them from GET /reference/commerce). */
+export const SPECIALTIES: Record<BusinessKind, readonly string[]> = {
+  restaurant: ['Sénégalais', 'Riz & sauces', 'Grillades', 'Plats du jour', 'Snacks', 'Fast-food', 'Petit-déjeuner', 'Pâtisserie', 'Jus & boissons', 'Africain', 'International', 'Végétarien'],
+  shop: ['Fournitures', 'Épicerie', 'Téléphonie', 'Informatique', 'Vêtements', 'Cosmétiques', 'Impression & reprographie', 'Électroménager', 'Accessoires', 'Services', 'Autre'],
+};
 
 /** "13:00" to "15:00": the same every day. Several services: lunch and dinner. */
 export type Service = { start: string; end: string };
@@ -17,12 +40,12 @@ export type Service = { start: string; end: string };
  */
 export type BusinessDoc = {
   _id: ObjectId;
-  /** The organization (members, payout number). One business per organization. */
+  /** The organization (members, payout number). One restaurant and one shop at most per organization. */
   orgId: ObjectId;
   kind: BusinessKind;
   name: string;
-  /** "Sénégalais", "Grillades", "Papeterie", "Téléphonie". */
-  specialty: string;
+  /** One or several, from SPECIALTIES: "Sénégalais", "Grillades"; "Fournitures", "Impression & reprographie". */
+  specialties: string[];
   description: string;
   photo: ImageRef | null;
   location: { lat: number; lng: number } | null;
@@ -31,11 +54,17 @@ export type BusinessDoc = {
   campus: Campus | null;
   phone: string;
   services: Service[];
-  /** Fee in FCFA (0: free); null: no delivery, pickup only. */
-  deliveryFee: number | null;
+  /** Delivery price per zone; all null: pickup only. */
+  deliveryFees: DeliveryFees;
+  /** How students may pay this business: cash (at delivery or at the counter), Wave, Orange Money. At least one. */
+  paymentMethods: OrderPaymentMethod[];
   /** The owner can pause orders (closed today, out of stock) without touching the hours. */
   acceptingOrders: boolean;
   active: boolean;
+  /** A student's own shop (products or services they sell on campus). */
+  byStudent?: boolean;
+  /** The students' average rating of their orders (ratings module); missing until the first one. */
+  rating?: { avg: number | null; count: number };
   createdAt: Date;
   updatedAt: Date;
 };
@@ -58,6 +87,11 @@ export type CatalogItemDoc = {
   stock: number | null;
   /** Shown and orderable today. */
   available: boolean;
+  /**
+   * False: shown for information only (a service done on the spot: "Impression · 25 F la page"), never in an order.
+   * Such an item has no stock.
+   */
+  orderable: boolean;
   sortOrder: number;
   archivedAt: Date | null;
   createdAt: Date;
@@ -88,9 +122,12 @@ export type OrderDoc = {
   deliveryFee: number;
   total: number;
   mode: OrderMode;
+  /** Delivery: the zone chosen (its price is `deliveryFee`). */
+  zone: DeliveryZone | null;
   address: string | null;
   note: string | null;
-  method: PaymentMethod;
+  /** `cash`: no online payment; paid at delivery or at the counter. */
+  method: OrderPaymentMethod;
   paymentId: ObjectId | null;
   status: OrderStatus;
   /** Every step, oldest first. */

@@ -562,7 +562,7 @@ export class TicketingService {
   async canFollowEvent(userId: ObjectId, eventId: ObjectId) {
     for (const h of this.handlers.values()) {
       const orgId = await h.orgOf(eventId);
-      if (orgId) return !!(await this.organizations.roleIn(orgId, userId, ['owner', 'manager', 'scanner']));
+      if (orgId) return !!(await this.organizations.roleIn(orgId, userId, ['owner', 'manager', 'scanner'], 'organizer'));
     }
     return false;
   }

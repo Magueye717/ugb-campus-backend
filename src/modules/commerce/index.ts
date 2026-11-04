@@ -9,11 +9,11 @@ import type { MediaApi } from '../media/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
 import type { OrganizationsApi } from '../organizations/index.js';
 import type { PaymentsApi } from '../payments/index.js';
-import { commerceCollections } from './commerce.collections.js';
+import { commerceCollections, commerceMigrations } from './commerce.collections.js';
 import { registerCommerceRoutes } from './commerce.routes.js';
 import { CommerceService } from './commerce.service.js';
 
-export { commerceCollections };
+export { commerceCollections, commerceMigrations };
 
 export const COMMERCE_SWEEP_QUEUE = 'commerce.sweep';
 
@@ -40,7 +40,9 @@ export function createCommerceModule(d: {
   const service = new CommerceService(d.db, d.mongo, d.clock, d.accounts, d.organizations, d.payments, d.media, d.notifications, d.limiter);
   d.payments.registerPurpose('commerce_order', service.orderPayment);
   return {
-    registerRoutes: (app, requireAdmin) => registerCommerceRoutes(app, { service, audit: d.audit, requireOrgRole: d.organizations.requireOrgRole, roleIn: (o, u, r) => d.organizations.roleIn(o, u, r), requireAdmin }),
+    registerRoutes: (app, requireAdmin) => registerCommerceRoutes(app, { service, audit: d.audit, requireOrgRole: d.organizations.requireOrgRole, roleIn: (o, u, r, sp) => d.organizations.roleIn(o, u, r, sp), requireAdmin,
+      editsKind: (u, k) => d.accounts.hasPlatformRole(u, k === 'restaurant' ? 'restaurant_editor' : 'shop_editor'),
+    }),
     processors: () => ({ [COMMERCE_SWEEP_QUEUE]: () => service.sweep() }),
     schedules: [{ queue: COMMERCE_SWEEP_QUEUE, everyMs: 15 * 60_000 }],
     service,

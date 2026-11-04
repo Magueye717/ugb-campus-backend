@@ -125,17 +125,21 @@ describe('my own student card', () => {
     expect(await ok(read(me))).toEqual({ matched: 'number', studentNumber: me.studentNumber, birthDate: '2002-03-12', birthPlace: 'Saint-Louis', nationality: 'Sénégalaise' });
     // Someone else's card is refused.
     expect(json(await read(other)).code).toBe('NOT_YOUR_CARD');
-    // Number unreadable: my names on it are enough.
+    // Number unreadable: names alone are not enough, the number must be mine.
     t.ocr.text = 'UNIVERSITE GASTON BERGER\nNom : BA\nPrénom : Aissatou\nNé(e) le 12/03/2002 à Saint-Louis';
-    expect(await ok(read(me))).toMatchObject({ matched: 'name', birthDate: '2002-03-12', birthPlace: 'Saint-Louis', nationality: null });
+    expect(json(await read(me)).field).toBe('file');
     // Only a student card.
     t.ocr.text = 'REPUBLIQUE DU SENEGAL\nCARTE D’IDENTITE CEDEAO\nPrénoms\nAISSATOU\nNom\nBA';
     expect(json(await read(me)).code).toBe('NOT_STUDENT_CARD');
 
     expect((await call(me, 'GET', '/me')).statusCode).toBe(200);
     expect(json(await t.app.inject({ method: 'PUT', url: '/api/v1/me/identity', headers: bearer(me.tokens.accessToken), payload: { birthDate: '2030-01-01', birthPlace: null, nationality: null } })).field).toBe('birthDate');
-    const saved = await t.app.inject({ method: 'PUT', url: '/api/v1/me/identity', headers: bearer(me.tokens.accessToken), payload: { birthDate: '2002-03-12', birthPlace: 'Saint-Louis', nationality: 'Sénégalaise', fromCard: true } });
-    expect(saved.statusCode).toBe(204);
+    const put = (who: Who) => t.app.inject({ method: 'PUT', url: '/api/v1/me/identity', headers: bearer(who.tokens.accessToken), payload: { birthDate: '2002-03-12', birthPlace: 'Saint-Louis', nationality: 'Sénégalaise', fromCard: true } });
+    // Without a scan of their own card: refused.
+    expect(json(await put(other)).code).toBe('CARD_SCAN_REQUIRED');
+    expect((await put(me)).statusCode).toBe(204);
+    // Saved once: locked.
+    expect(json(await put(me)).code).toBe('IDENTITY_LOCKED');
     expect((await ok(call(me, 'GET', '/me'))).student.identity).toMatchObject({ birthDate: '2002-03-12', birthPlace: 'Saint-Louis', nationality: 'Sénégalaise', fromCard: true });
   });
 });

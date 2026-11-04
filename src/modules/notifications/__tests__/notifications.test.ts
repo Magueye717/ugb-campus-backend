@@ -81,7 +81,7 @@ describe('what triggers them', () => {
     t.clock.set(T0);
     const owner = await createStaff(t);
     const org = await t.c.modules.organizations.create({ slug: `notif-${Date.now() % 1e6}`, name: 'Globe One', category: 'Entreprise', capabilities: ['caravans'], level: 'confirme', payoutPhone: owner.phone });
-    await t.c.modules.organizations.setMember(org._id, { phone: owner.phone, roles: ['owner'] }, null);
+    await t.c.modules.organizations.setOwner(org._id, owner.phone, null);
     const o = { userId: owner.userId.toHexString() };
     const orgId = org._id.toHexString();
     const v = json(await call(o, 'POST', `/org/${orgId}/vehicles`, { label: 'Minibus', plate: `NT ${Date.now() % 10000} XY`, capacity: 12 }));

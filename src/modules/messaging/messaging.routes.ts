@@ -3,12 +3,11 @@ import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fas
 import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
-import { IdParams, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
+import { IdParams, Nullable, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
 import type { AuditApi } from '../audit/index.js';
 import { messageView, type MessagingService } from './messaging.service.js';
 import { CONVERSATION_TYPES, MESSAGE_MAX_LENGTH } from './messaging.types.js';
 
-const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
 const Identity = Type.Object({ key: Type.String(), name: Type.String(), initials: Type.String(), role: Nullable(Type.String()) });
 
 export const MessageView = Type.Object({

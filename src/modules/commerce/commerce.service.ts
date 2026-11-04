@@ -10,19 +10,7 @@ import type { MediaApi } from '../media/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
 import type { OrganizationsApi } from '../organizations/index.js';
 import type { PaymentMethod, PaymentsApi, PurposeHandler } from '../payments/index.js';
-import {
-  ORDER_AUTO_COMPLETE_H,
-  ORDER_PAY_WITHIN_MIN,
-  type BusinessDoc,
-  type BusinessKind,
-  type CatalogItemDoc,
-  type ItemSection,
-  type OrderDoc,
-  type OrderLine,
-  type OrderMode,
-  type OrderStatus,
-  type Service,
-} from './commerce.types.js';
+import { type BusinessDoc, type BusinessKind, type CatalogItemDoc, DEFAULT_PAYMENT_METHODS, DELIVERY_ZONE_LABELS, DELIVERY_ZONES, type DeliveryFees, type DeliveryZone, type ItemSection, MAX_SPECIALTIES, ORDER_AUTO_COMPLETE_H, ORDER_PAY_WITHIN_MIN, ORDER_PAYMENT_LABELS, ORDER_PAYMENT_METHODS, type OrderDoc, type OrderLine, type OrderMode, type OrderPaymentMethod, type OrderStatus, type Service, SPECIALTIES } from './commerce.types.js';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -42,7 +30,8 @@ const NEXT: Partial<Record<OrderStatus, OrderStatus>> = { placed: 'accepted', ac
 
 export type BusinessInput = {
   name?: string;
-  specialty?: string;
+  paymentMethods?: OrderPaymentMethod[];
+  specialties?: string[];
   description?: string;
   photoId?: string | null;
   location?: { lat: number; lng: number } | null;
@@ -50,11 +39,16 @@ export type BusinessInput = {
   campus?: Campus | null;
   phone?: string;
   services?: Service[];
-  deliveryFee?: number | null;
+  deliveryFees?: DeliveryFees;
   acceptingOrders?: boolean;
 };
 
-export type ItemInput = { section: ItemSection; category?: string | null; name: string; detail?: string; price: number; photoId?: string | null; stock?: number | null; available?: boolean; sortOrder?: number };
+/** A business is found by its organization and its kind: one entity may run a restaurant and a shop. */
+export type BusinessRef = { orgId: ObjectId; kind: BusinessKind };
+const NO_DELIVERY: DeliveryFees = { campus1: null, campus2: null, outside: null };
+const delivers = (f: DeliveryFees) => DELIVERY_ZONES.some((z) => f[z] !== null);
+
+export type ItemInput = { section: ItemSection; category?: string | null; name: string; detail?: string; price: number; photoId?: string | null; stock?: number | null; available?: boolean; orderable?: boolean; sortOrder?: number };
 
 export class CommerceService {
   private readonly businesses: Collection<BusinessDoc>;
@@ -83,22 +77,105 @@ export class CommerceService {
    * The organization (capability restaurant or shop, its payouts to the owner's number), its owner (an account is
    * created for a new number: they set their password with "mot de passe oublié") and its business profile.
    */
-  async create(input: { kind: BusinessKind; name: string; specialty: string; owner: { phone: string; firstName: string; lastName: string } } & BusinessInput) {
-    const phone = this.accounts.phoneOrThrow(input.owner.phone);
-    const owner = (await this.accounts.findByPhone(phone)) ?? (await this.accounts.createStaffUser({ phone, firstName: input.owner.firstName, lastName: input.owner.lastName }));
-    const slug = `${input.kind}-${input.name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30)}-${randomCode(4).toLowerCase()}`;
-    const org = await this.organizations.create({
-      slug, name: input.name, category: input.kind === 'restaurant' ? 'Restaurant' : 'Boutique', capabilities: [input.kind], level: 'verifie', payoutPhone: owner.payoutAccount.phone,
-    });
-    await this.organizations.setMember(org._id, { phone, roles: ['owner'] }, null);
+  /**
+   * An admin adds a restaurant or a shop: to a new entity (with its owner, an account created for a new number), or
+   * to an existing one (`orgId`: Khoulé & frère's restaurant gets a shop) whose owners then hold the new space too.
+   */
+  /** `by`: who adds it (an editor): the picture they uploaded is claimed by them. */
+  async create(input: { kind: BusinessKind; name: string; specialties: string[]; orgId?: ObjectId; owner?: { phone: string; firstName: string; lastName: string; password?: string } } & BusinessInput, by?: ObjectId): Promise<BusinessDoc> {
+    const specialties = this.checkSpecialties(input.kind, input.specialties)!;
+    let orgId: ObjectId;
+    let ownerPhone: string;
+    if (input.orgId) {
+      const same = await this.businesses.findOne({ orgId: input.orgId, kind: input.kind });
+      if (same) throw errors.conflict('BUSINESS_EXISTS', `Cette entité a déjà ${input.kind === 'restaurant' ? 'un restaurant' : 'une boutique'} : ${same.name}. Modifie-le plutôt.`);
+      const org = await this.organizations.addCapability(input.orgId, input.kind);
+      orgId = org._id;
+      ownerPhone = org.payoutAccount?.phone ?? '';
+    } else {
+      if (!input.owner) throw errors.validation('Indique le propriétaire.', { field: 'owner' });
+      const phone = this.accounts.phoneOrThrow(input.owner.phone);
+      // One account, one entity (one restaurant, one shop, one organizer at most): a number that already owns one
+      // gets the business in it, never a second entity.
+      const known = await this.accounts.findByPhone(phone);
+      const owned = known ? await this.organizations.ownedBy(known._id) : [];
+      if (owned.length) return this.create({ ...input, owner: undefined, orgId: owned[0]!.orgId }, by);
+      const owner = known ?? (await this.accounts.createStaffUser({ phone, firstName: input.owner.firstName, lastName: input.owner.lastName, password: input.owner.password }));
+      const slug = `${input.kind}-${input.name.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 30)}-${randomCode(4).toLowerCase()}`;
+      const org = await this.organizations.create({
+        slug, name: input.name, category: input.kind === 'restaurant' ? 'Restaurant' : 'Boutique', capabilities: [input.kind], level: 'verifie', payoutPhone: owner.payoutAccount.phone,
+      });
+      await this.organizations.setOwner(org._id, phone, null);
+      orgId = org._id;
+      ownerPhone = owner.phone;
+    }
     const now = this.clock.now();
     const doc: BusinessDoc = {
-      _id: new ObjectId(), orgId: org._id, kind: input.kind, name: input.name.trim(), specialty: input.specialty.trim(), description: '', photo: null, location: null, address: '', campus: null,
-      phone: localPhone(owner.phone), services: input.kind === 'restaurant' ? [{ start: '12:00', end: '15:00' }, { start: '19:00', end: '22:00' }] : [{ start: '08:00', end: '21:00' }],
-      deliveryFee: null, acceptingOrders: true, active: true, createdAt: now, updatedAt: now,
+      _id: new ObjectId(), orgId, kind: input.kind, name: input.name.trim(), specialties, description: '', photo: null, location: null, address: '', campus: null,
+      phone: ownerPhone ? localPhone(ownerPhone) : '', services: input.kind === 'restaurant' ? [{ start: '12:00', end: '15:00' }, { start: '19:00', end: '22:00' }] : [{ start: '08:00', end: '21:00' }],
+      deliveryFees: NO_DELIVERY, paymentMethods: [...DEFAULT_PAYMENT_METHODS], acceptingOrders: true, active: true, createdAt: now, updatedAt: now,
     };
     await this.businesses.insertOne(doc);
-    return this.update(org._id, owner._id, input);
+    const claimer = by ?? (await this.organizations.members(orgId, input.kind)).find((m) => m.roles.includes('owner'))?.userId ?? new ObjectId();
+    return this.update({ orgId, kind: input.kind }, claimer, input);
+  }
+
+  /**
+   * A student opens their own shop (products or services): under their personal entity, they own it, orders are paid
+   * to their number. It's a shop like the others: catalog, orders, team, and its articles in the market.
+   */
+  async openStudentShop(userId: ObjectId, input: { name: string; specialties: string[]; description?: string; photoId?: string | null }) {
+    const user = await this.accounts.findById(userId);
+    if (!user) throw errors.notFound();
+    if (!(await this.accounts.hasStudentProfile(userId))) throw errors.forbidden('Réservé aux étudiants.');
+    // One account, one entity: a student who already owns one (their restaurant…) opens the shop in it.
+    const orgId = (await this.organizations.ownedBy(userId))[0]?.orgId ?? (await this.organizations.personalOrg(user))!;
+    if (await this.businesses.findOne({ orgId, kind: 'shop' })) throw errors.conflict('SHOP_EXISTS', 'Tu as déjà ta boutique : ouvre-la depuis « Mes espaces ».');
+    const specialties = this.checkSpecialties('shop', input.specialties)!;
+    await this.organizations.addCapability(orgId, 'shop');
+    const now = this.clock.now();
+    await this.businesses.insertOne({
+      _id: new ObjectId(), orgId, kind: 'shop', name: input.name.trim(), specialties, description: '', photo: null, location: null, address: '', campus: null,
+      phone: localPhone(user.phone), services: [{ start: '08:00', end: '22:00' }], deliveryFees: NO_DELIVERY, paymentMethods: [...DEFAULT_PAYMENT_METHODS], acceptingOrders: true, active: true, byStudent: true, createdAt: now, updatedAt: now,
+    });
+    return this.update({ orgId, kind: 'shop' }, userId, { description: input.description ?? '', ...(input.photoId ? { photoId: input.photoId } : {}) });
+  }
+
+  /** One to MAX_SPECIALTIES, each from the kind's list (duplicates dropped). Undefined: unchanged. */
+  private checkSpecialties(kind: BusinessKind, list: string[] | undefined) {
+    if (list === undefined) return undefined;
+    const clean = [...new Set(list.map((x) => x.trim()))];
+    if (!clean.length || clean.length > MAX_SPECIALTIES) throw errors.validation(`Choisis de 1 à ${MAX_SPECIALTIES} spécialités.`, { field: 'specialties' });
+    if (clean.some((x) => !SPECIALTIES[kind].includes(x))) throw errors.validation('Choisis les spécialités dans la liste.', { field: 'specialties' });
+    return clean;
+  }
+
+  async byId(id: ObjectId) {
+    const b = await this.businesses.findOne({ _id: id });
+    if (!b) throw errors.notFound('Commerce introuvable.');
+    return b;
+  }
+
+  /**
+   * Référencement, before adding a restaurant or a shop: does this number have an account, and which entities does it
+   * own, with the businesses each runs (a student's own shop too: "Magueye Gueye · MGG fashion").
+   */
+  async ownerLookup(phoneInput: string) {
+    const user = await this.accounts.findByPhone(this.accounts.phoneOrThrow(phoneInput));
+    if (!user || user.status === 'deleted') return { account: null, entities: [] };
+    const owned = await this.organizations.ownedBy(user._id);
+    const runs = owned.length ? await this.businesses.find({ orgId: { $in: owned.map((o) => o.orgId) } }, { projection: { orgId: 1, kind: 1, name: 1 } }).toArray() : [];
+    // One entity per account: the first is the one (there is never more than one since this rule).
+    return {
+      account: { firstName: user.firstName, lastName: user.lastName },
+      entities: owned.map((o) => {
+        const mine = runs.filter((b) => b.orgId.equals(o.orgId));
+        return {
+          orgId: o.orgId.toHexString(), name: o.name, personal: o.personal, organizer: o.organizer, kinds: mine.map((b) => b.kind),
+          businesses: mine.map((b) => ({ id: b._id.toHexString(), kind: b.kind, name: b.name })),
+        };
+      }),
+    };
   }
 
   listAll() {
@@ -113,17 +190,18 @@ export class CommerceService {
 
   // ---- Its own space: profile and catalog -------------------------------------------------------------------------
 
-  async ofOrg(orgId: ObjectId) {
-    const b = await this.businesses.findOne({ orgId });
+  async ofOrg(ref: BusinessRef) {
+    const b = await this.businesses.findOne({ orgId: ref.orgId, kind: ref.kind });
     if (!b) throw errors.notFound('Commerce introuvable.');
     return b;
   }
 
-  async update(orgId: ObjectId, by: ObjectId, input: BusinessInput) {
-    const b = await this.ofOrg(orgId);
+  async update(ref: BusinessRef, by: ObjectId, input: BusinessInput) {
+    const b = await this.ofOrg(ref);
+    const specialties = this.checkSpecialties(b.kind, input.specialties);
     const set: Partial<BusinessDoc> = { updatedAt: this.clock.now() };
     if (input.name !== undefined) set.name = input.name.trim();
-    if (input.specialty !== undefined) set.specialty = input.specialty.trim();
+    if (specialties) set.specialties = specialties;
     if (input.description !== undefined) set.description = input.description.trim();
     if (input.photoId !== undefined) set.photo = input.photoId ? (await this.media.claim(by, [input.photoId]))[0]! : null;
     if (input.location !== undefined) set.location = input.location;
@@ -135,8 +213,13 @@ export class CommerceService {
       if (!ok || !input.services.length) throw errors.validation('Horaires invalides : de 08:00 à 15:00 par exemple.', { field: 'services' });
       set.services = [...input.services].sort((a, b2) => minutes(a.start) - minutes(b2.start));
     }
-    if (input.deliveryFee !== undefined) set.deliveryFee = input.deliveryFee;
+    if (input.deliveryFees !== undefined) set.deliveryFees = { ...NO_DELIVERY, ...input.deliveryFees };
     if (input.acceptingOrders !== undefined) set.acceptingOrders = input.acceptingOrders;
+    if (input.paymentMethods !== undefined) {
+      const methods = ORDER_PAYMENT_METHODS.filter((m) => input.paymentMethods!.includes(m));
+      if (!methods.length) throw errors.validation('Accepte au moins un moyen de paiement.', { field: 'paymentMethods' });
+      set.paymentMethods = methods;
+    }
     await this.businesses.updateOne({ _id: b._id }, { $set: set });
     return (await this.businesses.findOne({ _id: b._id }))!;
   }
@@ -151,21 +234,22 @@ export class CommerceService {
     if (!allowed.includes(section)) throw errors.validation(b.kind === 'restaurant' ? 'Un restaurant propose des menus et des boissons.' : 'Une boutique propose des articles.', { field: 'section' });
   }
 
-  async addItem(orgId: ObjectId, by: ObjectId, input: ItemInput) {
-    const b = await this.ofOrg(orgId);
+  async addItem(ref: BusinessRef, by: ObjectId, input: ItemInput) {
+    const b = await this.ofOrg(ref);
     this.checkSection(b, input.section);
     const now = this.clock.now();
+    const orderable = input.orderable ?? true;
     const doc: CatalogItemDoc = {
       _id: new ObjectId(), businessId: b._id, section: input.section, category: input.category?.trim() || null, name: input.name.trim(), detail: input.detail?.trim() ?? '', price: input.price,
-      photo: input.photoId ? (await this.media.claim(by, [input.photoId]))[0]! : null, stock: b.kind === 'shop' ? (input.stock ?? null) : null, available: input.available ?? true,
+      photo: input.photoId ? (await this.media.claim(by, [input.photoId]))[0]! : null, stock: b.kind === 'shop' && orderable ? (input.stock ?? null) : null, available: input.available ?? true, orderable,
       sortOrder: input.sortOrder ?? now.getTime(), archivedAt: null, createdAt: now, updatedAt: now,
     };
     await this.items.insertOne(doc);
     return doc;
   }
 
-  async updateItem(orgId: ObjectId, by: ObjectId, itemId: ObjectId, input: Partial<ItemInput>) {
-    const b = await this.ofOrg(orgId);
+  async updateItem(ref: BusinessRef, by: ObjectId, itemId: ObjectId, input: Partial<ItemInput>) {
+    const b = await this.ofOrg(ref);
     const item = await this.items.findOne({ _id: itemId, businessId: b._id, archivedAt: null });
     if (!item) throw errors.notFound('Article introuvable.');
     if (input.section) this.checkSection(b, input.section);
@@ -178,14 +262,17 @@ export class CommerceService {
     if (input.photoId !== undefined) set.photo = input.photoId ? (await this.media.claim(by, [input.photoId]))[0]! : null;
     if (input.stock !== undefined && b.kind === 'shop') set.stock = input.stock;
     if (input.available !== undefined) set.available = input.available;
+    if (input.orderable !== undefined) set.orderable = input.orderable;
+    // For information only: nothing to count.
+    if ((set.orderable ?? item.orderable) === false) set.stock = null;
     if (input.sortOrder !== undefined) set.sortOrder = input.sortOrder;
     await this.items.updateOne({ _id: itemId }, { $set: set });
     return (await this.items.findOne({ _id: itemId }))!;
   }
 
   /** Out of the catalog; past orders keep their lines. */
-  async removeItem(orgId: ObjectId, itemId: ObjectId) {
-    const b = await this.ofOrg(orgId);
+  async removeItem(ref: BusinessRef, itemId: ObjectId) {
+    const b = await this.ofOrg(ref);
     const res = await this.items.updateOne({ _id: itemId, businessId: b._id, archivedAt: null }, { $set: { archivedAt: this.clock.now() } });
     if (!res.matchedCount) throw errors.notFound('Article introuvable.');
   }
@@ -247,6 +334,11 @@ export class CommerceService {
     return { ...this.publicView(b), items: items.map((i) => this.itemView(i)) };
   }
 
+  /** The students' average rating of its orders (ratings module). */
+  async setRating(businessId: ObjectId, avg: number | null, count: number) {
+    await this.businesses.updateOne({ _id: businessId }, { $set: { rating: { avg, count }, updatedAt: this.clock.now() } });
+  }
+
   publicView(b: BusinessDoc) {
     const st = this.status(b);
     return {
@@ -254,7 +346,9 @@ export class CommerceService {
       orgId: b.orgId.toHexString(),
       kind: b.kind,
       name: b.name,
-      specialty: b.specialty,
+      specialties: b.specialties,
+      // Joined, for the lines that show it ("Sénégalais · Grillades").
+      specialty: b.specialties.join(' · '),
       description: b.description,
       photo: b.photo?.url ?? null,
       location: b.location,
@@ -266,16 +360,22 @@ export class CommerceService {
       hours: b.services.map((s) => `${hourLabel(s.start)}-${hourLabel(s.end)}`).join(' · '),
       open: st.open,
       statusLabel: st.label,
-      deliveryFee: b.deliveryFee,
+      deliveryFees: b.deliveryFees,
+      // The lowest price, for the cards ("Livraison dès 200 F"); null: pickup only.
+      deliveryFee: delivers(b.deliveryFees) ? Math.min(...DELIVERY_ZONES.map((z) => b.deliveryFees[z]).filter((f): f is number => f !== null)) : null,
       acceptingOrders: b.acceptingOrders,
+      rating: b.rating?.avg ?? null,
+      ratingCount: b.rating?.count ?? 0,
+      paymentMethods: b.paymentMethods.map((m) => ({ value: m, label: ORDER_PAYMENT_LABELS[m] })),
       active: b.active,
+      byStudent: !!b.byStudent,
     };
   }
 
   itemView(i: CatalogItemDoc) {
     return {
       id: i._id.toHexString(), section: i.section, category: i.category, name: i.name, detail: i.detail, price: i.price, photo: i.photo?.url ?? null,
-      stock: i.stock, soldOut: i.stock !== null && i.stock <= 0, available: i.available,
+      stock: i.stock, soldOut: i.stock !== null && i.stock <= 0, available: i.available, orderable: i.orderable,
       photoId: i.photo?.mediaId.toHexString() ?? null,
     };
   }
@@ -286,15 +386,21 @@ export class CommerceService {
    * One order to one business, paid now (Wave / Orange Money). Shops' stock is taken here (a conditional update per
    * article: two students never get the last one) and given back if the order isn't paid, is refused or cancelled.
    */
-  async place(userId: ObjectId, businessId: ObjectId, input: { lines: { itemId: string; qty: number }[]; mode: OrderMode; address?: string | null; note?: string | null; method: PaymentMethod; returnUrl?: string | null }, baseUrl: string) {
+  async place(userId: ObjectId, businessId: ObjectId, input: { lines: { itemId: string; qty: number }[]; mode: OrderMode; zone?: DeliveryZone | null; address?: string | null; note?: string | null; method: OrderPaymentMethod; returnUrl?: string | null }, baseUrl: string) {
     await this.limiter.hit(`order:${userId.toHexString()}`, { limit: 20, windowS: 3600 });
-    this.payments.assertAvailable(input.method);
-    const returnUrl = this.payments.validateReturnUrl(input.returnUrl);
+    const cash = input.method === 'cash';
+    if (!cash) this.payments.assertAvailable(input.method as PaymentMethod);
+    const returnUrl = cash ? null : this.payments.validateReturnUrl(input.returnUrl);
     const b = await this.businesses.findOne({ _id: businessId, active: true });
     if (!b) throw errors.notFound('Commerce introuvable.');
+    if (!b.paymentMethods.includes(input.method)) {
+      throw errors.validation(`${b.name} accepte : ${b.paymentMethods.map((m) => ORDER_PAYMENT_LABELS[m]).join(', ')}.`, { field: 'method' });
+    }
     const st = this.status(b);
     if (!st.open) throw errors.conflict('BUSINESS_CLOSED', `${b.name} ne prend pas de commande pour le moment (${st.label.toLowerCase()}).`);
-    if (input.mode === 'delivery' && b.deliveryFee === null) throw errors.validation(`${b.name} ne livre pas : choisis « À emporter ».`, { field: 'mode' });
+    if (input.mode === 'delivery' && !delivers(b.deliveryFees)) throw errors.validation(`${b.name} ne livre pas : choisis « À emporter ».`, { field: 'mode' });
+    if (input.mode === 'delivery' && !input.zone) throw errors.validation('Choisis où te livrer : campus 1, campus 2 ou hors campus.', { field: 'zone' });
+    if (input.mode === 'delivery' && b.deliveryFees[input.zone!] === null) throw errors.validation(`${b.name} ne livre pas ${input.zone === 'outside' ? 'hors du campus' : `au ${DELIVERY_ZONE_LABELS[input.zone!].toLowerCase()}`}.`, { field: 'zone' });
     if (input.mode === 'delivery' && !input.address?.trim()) throw errors.validation('Indique où te livrer.', { field: 'address' });
     const wanted = input.lines.filter((l) => l.qty > 0);
     if (!wanted.length) throw errors.validation('Ton panier est vide.', { field: 'lines' });
@@ -303,10 +409,11 @@ export class CommerceService {
     const lines: OrderLine[] = wanted.map((l) => {
       const item = items.find((i) => i._id.toHexString() === l.itemId);
       if (!item || !item.available) throw errors.conflict('ITEM_UNAVAILABLE', `${item?.name ?? 'Un article'} n’est plus disponible : retire-le de ton panier.`);
+      if (!item.orderable) throw errors.rule('ITEM_NOT_ORDERABLE', `${item.name} se fait sur place : il ne se commande pas.`);
       return { itemId: item._id, name: item.name, price: item.price, qty: l.qty };
     });
     const subtotal = lines.reduce((n, l) => n + l.price * l.qty, 0);
-    const deliveryFee = input.mode === 'delivery' ? (b.deliveryFee ?? 0) : 0;
+    const deliveryFee = input.mode === 'delivery' ? (b.deliveryFees[input.zone!] ?? 0) : 0;
     const now = this.clock.now();
 
     const { order, payment } = await withTransaction(this.mongo, async (session) => {
@@ -317,21 +424,28 @@ export class CommerceService {
         if (!taken.modifiedCount) throw errors.conflict('OUT_OF_STOCK', `Plus assez de « ${item.name} » : ${Math.max(0, item.stock)} restant${item.stock > 1 ? 's' : ''}.`);
       }
       const orderId = new ObjectId();
-      const created = await this.payments.create(
+      // Cash: no online payment; the order goes straight to the business, paid at delivery or at the counter.
+      const created = cash
+        ? null
+        : await this.payments.create(
         {
-          userId, purpose: 'commerce_order', purposeRef: orderId, amount: subtotal + deliveryFee, method: input.method,
+          userId, purpose: 'commerce_order', purposeRef: orderId, amount: subtotal + deliveryFee, method: input.method as PaymentMethod,
           description: `${b.name} · ${lines.reduce((n, l) => n + l.qty, 0)} article(s)`, expiresAt: new Date(now.getTime() + ORDER_PAY_WITHIN_MIN * MIN), returnUrl,
         },
         session,
       );
       const doc: OrderDoc = {
-        _id: orderId, code: `C${randomCode(6)}`, businessId: b._id, orgId: b.orgId, userId, lines, subtotal, deliveryFee, total: subtotal + deliveryFee, mode: input.mode,
-        address: input.mode === 'delivery' ? input.address!.trim() : null, note: input.note?.trim() || null, method: input.method, paymentId: created._id, status: 'pending_payment',
-        history: [{ status: 'pending_payment', at: now, by: userId }], refusal: null, payoutId: null, refundPayoutId: null, createdAt: now, updatedAt: now,
+        _id: orderId, code: `C${randomCode(6)}`, businessId: b._id, orgId: b.orgId, userId, lines, subtotal, deliveryFee, total: subtotal + deliveryFee, mode: input.mode, zone: input.mode === 'delivery' ? input.zone! : null,
+        address: input.mode === 'delivery' ? input.address!.trim() : null, note: input.note?.trim() || null, method: input.method, paymentId: created?._id ?? null, status: cash ? 'placed' : 'pending_payment',
+        history: [{ status: cash ? 'placed' : 'pending_payment', at: now, by: userId }], refusal: null, payoutId: null, refundPayoutId: null, createdAt: now, updatedAt: now,
       };
       await this.orders.insertOne(doc, { session });
       return { order: doc, payment: created };
     });
+    if (!payment) {
+      await this.tellBusiness(order);
+      return { order, payment: null };
+    }
     return { order, payment: await this.payments.openCheckout(payment, baseUrl) };
   }
 
@@ -366,14 +480,14 @@ export class CommerceService {
 
   /** A new order: every member of the team (owner, managers, staff) gets the push, with the sound. */
   private async tellBusiness(o: OrderDoc) {
-    const team = (await this.organizations.members(o.orgId)).filter((m) => m.roles.some((r) => r === 'owner' || r === 'manager' || r === 'staff'));
+    const team = await this.teamOf(o);
     const what = o.lines.map((l) => `${l.qty} × ${l.name}`).join(', ');
     await this.notifications.notify(
       team.map((m) => m.userId),
       {
         type: 'commerce.order_placed', category: 'paiements', icon: 'receipt-outline', tone: 'success', url: BUSINESS_ORDER_URL(o._id), dedupeKey: `order:${o._id.toHexString()}:placed`, channel: 'orders',
         title: `Nouvelle commande ${o.code} · ${fcfa(o.total)}`,
-        body: `${what}. ${o.mode === 'delivery' ? `Livraison : ${o.address}` : 'À emporter'}.`,
+        body: `${what}. ${o.mode === 'delivery' ? `Livraison : ${o.address}` : 'À emporter'}.${o.method === 'cash' ? ` À encaisser en espèces : ${fcfa(o.total)}.` : ''}`,
       },
     );
   }
@@ -387,8 +501,8 @@ export class CommerceService {
           : { title: `Ta commande est prête`, body: `Passe la chercher chez ${b.name} avec le code ${o.code}.`, tone: 'success' },
       completed:
         o.mode === 'delivery'
-          ? { title: 'Commande livrée', body: `${b.name} : ta commande ${o.code} t’a été livrée. Bon appétit !`, tone: 'success' }
-          : { title: 'Commande récupérée', body: `${b.name} : ta commande ${o.code} t’a été remise.`, tone: 'success' },
+          ? { title: 'Commande livrée', body: `${b.name} : ta commande ${o.code} t’a été livrée. Bon appétit ! Une note pour ${b.name} ? (facultatif)`, tone: 'success' }
+          : { title: 'Commande récupérée', body: `${b.name} : ta commande ${o.code} t’a été remise. Une note pour ${b.name} ? (facultatif)`, tone: 'success' },
       refused: { title: `Commande refusée · ${b.name}`, body: `${o.refusal ?? 'Le commerce ne peut pas la servir.'} Tu es remboursé (${fcfa(o.total)}).`, tone: 'danger' },
     };
     const m = msg[o.status];
@@ -399,21 +513,28 @@ export class CommerceService {
     });
   }
 
+  /** Who works in the order's business (its restaurant or shop space): they get its notifications. */
+  private async teamOf(o: Pick<OrderDoc, 'orgId' | 'businessId'>) {
+    const b = await this.businesses.findOne({ _id: o.businessId }, { projection: { kind: 1 } });
+    if (!b) return [];
+    return (await this.organizations.members(o.orgId, b.kind)).filter((m) => m.roles.some((r) => r === 'owner' || r === 'manager' || r === 'staff'));
+  }
+
   /** Before the business accepts it: refunded in full. The team hears it (no need to prepare it any more). */
   async cancel(userId: ObjectId, orderId: ObjectId) {
     const o = await this.closeWithRefund({ _id: orderId, userId }, 'cancelled', userId, null);
-    const team = (await this.organizations.members(o.orgId)).filter((m) => m.roles.some((r) => r === 'owner' || r === 'manager' || r === 'staff'));
+    const team = await this.teamOf(o);
     await this.notifications.notify(
       team.map((m) => m.userId),
       {
         type: 'commerce.order_cancelled', category: 'paiements', icon: 'close-circle-outline', tone: 'danger', url: BUSINESS_ORDER_URL(o._id), dedupeKey: `order:${o._id.toHexString()}:cancelled`,
-        title: `Commande ${o.code} annulée`, body: 'Le client a annulé avant que tu l’acceptes. Il est remboursé : rien à préparer.',
+        title: `Commande ${o.code} annulée`, body: o.method === 'cash' ? 'Le client a annulé avant que tu l’acceptes : rien à préparer.' : 'Le client a annulé avant que tu l’acceptes. Il est remboursé : rien à préparer.',
       },
     );
     return o;
   }
 
-  private async closeWithRefund(filter: { _id: ObjectId; userId?: ObjectId; orgId?: ObjectId }, to: 'cancelled' | 'refused', by: ObjectId, reason: string | null) {
+  private async closeWithRefund(filter: { _id: ObjectId; userId?: ObjectId; businessId?: ObjectId }, to: 'cancelled' | 'refused', by: ObjectId, reason: string | null) {
     const payoutIds: ObjectId[] = [];
     let order!: OrderDoc;
     await withTransaction(this.mongo, async (session) => {
@@ -430,8 +551,13 @@ export class CommerceService {
         throw errors.conflict('ORDER_ALREADY_TAKEN', to === 'cancelled' ? 'Le commerce a déjà pris ta commande en charge : contacte-le.' : 'Cette commande n’attend plus de réponse.');
       }
       await this.giveBackStock(o, session);
+      // Paid in cash (not yet, the order isn't served): nothing to refund.
+      if (o.method === 'cash') {
+        order = o;
+        return;
+      }
       const payout = await this.payments.createPayout(
-        { kind: 'refund', beneficiaryUserId: o.userId, method: o.method, amount: o.total, reason: to === 'refused' ? 'order_refused' : 'order_cancelled', source: { type: 'order', id: o._id }, idempotencyKey: `order:${o._id.toHexString()}:refund` },
+        { kind: 'refund', beneficiaryUserId: o.userId, method: o.method as PaymentMethod, amount: o.total, reason: to === 'refused' ? 'order_refused' : 'order_cancelled', source: { type: 'order', id: o._id }, idempotencyKey: `order:${o._id.toHexString()}:refund` },
         session,
       );
       payoutIds.push(payout._id);
@@ -456,8 +582,8 @@ export class CommerceService {
   // ---- The business: incoming orders ------------------------------------------------------------------------------
 
   /** Active orders first (to serve), then the day's finished ones. */
-  async queue(orgId: ObjectId, scope: 'active' | 'done') {
-    const b = await this.ofOrg(orgId);
+  async queue(ref: BusinessRef, scope: 'active' | 'done') {
+    const b = await this.ofOrg(ref);
     const since = new Date(this.clock.now().getTime() - 48 * HOUR);
     const docs = await this.orders
       .find(scope === 'active' ? { businessId: b._id, status: { $in: ['placed', 'accepted', 'ready'] } } : { businessId: b._id, status: { $in: ['completed', 'refused', 'cancelled'] }, updatedAt: { $gt: since } })
@@ -467,23 +593,25 @@ export class CommerceService {
     return this.orderViews(docs, true);
   }
 
-  async businessOrder(orgId: ObjectId, id: ObjectId) {
-    const o = await this.orders.findOne({ _id: id, orgId, status: { $ne: 'pending_payment' } });
+  async businessOrder(ref: BusinessRef, id: ObjectId) {
+    const b = await this.ofOrg(ref);
+    const o = await this.orders.findOne({ _id: id, businessId: b._id, status: { $ne: 'pending_payment' } });
     if (!o) throw errors.notFound('Commande introuvable.');
     return (await this.orderViews([o], true))[0]!;
   }
 
   /** accepted → ready → completed, one step at a time. Completed: the amount goes to the business's number. */
-  async advance(orgId: ObjectId, id: ObjectId, by: ObjectId, to: 'accepted' | 'ready' | 'completed') {
+  async advance(ref: BusinessRef, id: ObjectId, by: ObjectId, to: 'accepted' | 'ready' | 'completed') {
+    const { _id: businessId } = await this.ofOrg(ref);
     const from = (Object.keys(NEXT) as OrderStatus[]).find((k) => NEXT[k] === to)!;
     const now = this.clock.now();
     const o = await this.orders.findOneAndUpdate(
-      { _id: id, orgId, status: from },
+      { _id: id, businessId, status: from },
       { $set: { status: to, updatedAt: now }, $push: { history: { status: to, at: now, by } } },
       { returnDocument: 'after' },
     );
     if (!o) {
-      if (!(await this.orders.findOne({ _id: id, orgId }))) throw errors.notFound('Commande introuvable.');
+      if (!(await this.orders.findOne({ _id: id, businessId }))) throw errors.notFound('Commande introuvable.');
       throw errors.conflict('ORDER_STEP', 'Cette commande a déjà changé : recharge la liste.');
     }
     const b = await this.businesses.findOne({ _id: o.businessId });
@@ -496,9 +624,10 @@ export class CommerceService {
    * At the counter: the student gives their order's code (typed, or its QR scanned, "UGBCMD:C7KQ2M"). An order being
    * prepared or ready is handed over (completed, paid out); anything else says why not.
    */
-  async handover(orgId: ObjectId, rawCode: string, by: ObjectId) {
+  async handover(ref: BusinessRef, rawCode: string, by: ObjectId) {
+    const { _id: businessId } = await this.ofOrg(ref);
     const code = rawCode.trim().toUpperCase().replace(/^UGBCMD:/, '').replace(/\s/g, '');
-    const o = await this.orders.findOne({ orgId, code, status: { $ne: 'pending_payment' } });
+    const o = await this.orders.findOne({ businessId, code, status: { $ne: 'pending_payment' } });
     if (!o) throw errors.notFound(`Aucune commande ${code} chez toi.`);
     if (o.status === 'completed') throw errors.conflict('ORDER_ALREADY_DONE', `La commande ${code} a déjà été remise.`);
     if (o.status === 'placed') throw errors.conflict('ORDER_NOT_ACCEPTED', `Accepte d’abord la commande ${code}.`);
@@ -516,8 +645,9 @@ export class CommerceService {
     return done;
   }
 
-  async refuse(orgId: ObjectId, id: ObjectId, by: ObjectId, reason: string) {
-    const o = await this.closeWithRefund({ _id: id, orgId }, 'refused', by, reason);
+  async refuse(ref: BusinessRef, id: ObjectId, by: ObjectId, reason: string) {
+    const { _id: businessId } = await this.ofOrg(ref);
+    const o = await this.closeWithRefund({ _id: id, businessId }, 'refused', by, reason);
     const b = await this.businesses.findOne({ _id: o.businessId });
     await this.tellStudent(o, b!);
     return o;
@@ -525,15 +655,17 @@ export class CommerceService {
 
   /** The order's amount to the organization's payout number, once. */
   private async payOut(o: OrderDoc, by: ObjectId | null) {
+    // Cash: the business was paid by hand.
+    if (o.method === 'cash') return;
     const phone = await this.organizations.payoutPhone(o.orgId);
     if (!phone) return;
-    const owner = by ?? (await this.organizations.members(o.orgId)).find((m) => m.roles.includes('owner'))?.userId;
+    const owner = by ?? (await this.teamOf(o)).find((m) => m.roles.includes('owner'))?.userId;
     if (!owner) return;
     const payoutIds: ObjectId[] = [];
     await withTransaction(this.mongo, async (session) => {
       payoutIds.length = 0;
       const payout = await this.payments.createPayout(
-        { kind: 'organizer_claim', beneficiaryUserId: owner, payTo: { orgId: o.orgId, phone }, method: o.method, amount: o.total, reason: 'order_payout', source: { type: 'order', id: o._id }, idempotencyKey: `order:${o._id.toHexString()}:payout` },
+        { kind: 'organizer_claim', beneficiaryUserId: owner, payTo: { orgId: o.orgId, phone }, method: o.method as PaymentMethod, amount: o.total, reason: 'order_payout', source: { type: 'order', id: o._id }, idempotencyKey: `order:${o._id.toHexString()}:payout` },
         session,
       );
       payoutIds.push(payout._id);
@@ -573,12 +705,16 @@ export class CommerceService {
           lines: o.lines.map((l) => ({ itemId: l.itemId.toHexString(), name: l.name, price: l.price, qty: l.qty, photo: photos.get(l.itemId.toHexString()) ?? null })),
           subtotal: o.subtotal,
           deliveryFee: o.deliveryFee,
+          zone: o.zone ?? null,
+          zoneLabel: o.zone ? DELIVERY_ZONE_LABELS[o.zone] : null,
           total: o.total,
           mode: o.mode,
           address: o.address,
           note: o.note,
           refusal: o.refusal,
           refunded: !!o.refundPayoutId,
+          method: o.method,
+          methodLabel: ORDER_PAYMENT_LABELS[o.method],
           history: o.history.map((h) => ({ status: h.status, at: h.at.toISOString() })),
           createdAt: o.createdAt.toISOString(),
           payment: payment && (payment.status === 'created' || payment.status === 'pending') ? { reference: payment.reference, checkoutUrl: payment.checkoutUrl } : null,

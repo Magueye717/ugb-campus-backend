@@ -1,9 +1,8 @@
 import { Type } from 'typebox';
 
-import { PhoneInput } from '../../platform/http/schemas.js';
+import { Nullable, PhoneInput } from '../../platform/http/schemas.js';
 import { CAMPUSES, PLATFORM_ROLES, REGIONS, UFR_CODES } from './accounts.types.js';
 
-const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
 
 export const MeResponse = Type.Object({
   id: Type.String(),
@@ -33,10 +32,20 @@ export const MeResponse = Type.Object({
     }),
   ),
   /** Drives AuthContext.spaces in the app. */
-  spaces: Type.Array(Type.Union([Type.Literal('student'), Type.Literal('organizer'), Type.Literal('business'), Type.Literal('resto'), Type.Literal('alerts')]), {
-    description: 'Spaces the app can open, the first being home. resto: public restaurants’ stock levels (resto_u_staff); alerts: campus alerts (content_editor); admins get both.',
-  }),
-  organizations: Type.Array(Type.Object({ id: Type.String(), name: Type.String(), category: Type.String(), level: Type.String(), roles: Type.Array(Type.String()), capabilities: Type.Array(Type.String()) })),
+  spaces: Type.Array(
+    Type.Object({
+      key: Type.String({ description: '"student", "restaurant:<orgId>", "shop:<orgId>", "organizer:<orgId>", "admin", "resto", "alerts", "directory": what /espace opens.' }),
+      type: Type.Union([Type.Literal('student'), Type.Literal('organizer'), Type.Literal('business'), Type.Literal('admin'), Type.Literal('resto'), Type.Literal('alerts'), Type.Literal('directory')]),
+      kind: Nullable(Type.Union([Type.Literal('restaurant'), Type.Literal('shop')])),
+      orgId: Nullable(Type.String()),
+      name: Type.String({ description: 'The organization (Khoulé & frère) or the space (Administration).' }),
+      roles: Type.Array(Type.String()),
+      logoUrl: Nullable(Type.String()),
+      personal: Type.Boolean({ description: 'A student’s own entity (their shop, their events).' }),
+    }),
+    { description: 'Spaces the app can open, the first being home. One per space of each organization: an entity may run a restaurant, a shop and caravans.' },
+  ),
+  organizations: Type.Array(Type.Object({ id: Type.String(), name: Type.String(), category: Type.String(), level: Type.String(), roles: Type.Array(Type.String()), capabilities: Type.Array(Type.String()), space: Type.String() })),
   payoutPhoneMasked: Type.String(),
   email: Nullable(Type.Object({ address: Type.String(), verified: Type.Boolean() })),
   /** Null until the media module ships (profile picture upload). */
@@ -67,7 +76,7 @@ export const LocationBody = Type.Object(
 );
 
 export const ResidenceBody = Type.Object(
-  { onCampus: Type.Boolean(), village: Type.Optional(Nullable(Type.String({ maxLength: 40 }))), room: Type.Optional(Nullable(Type.String({ maxLength: 8 }))) },
+  { campus: Type.Optional(Type.Enum(CAMPUSES)), onCampus: Type.Boolean(), village: Type.Optional(Nullable(Type.String({ maxLength: 40 }))), room: Type.Optional(Nullable(Type.String({ maxLength: 8 }))) },
   { additionalProperties: false },
 );
 

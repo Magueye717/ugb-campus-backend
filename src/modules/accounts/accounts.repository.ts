@@ -40,8 +40,13 @@ export class AccountsRepository {
     return this.users.findOne({ phone, status: { $ne: 'deleted' } }, { session });
   }
 
-  findProfileByUserId(userId: ObjectId) {
-    return this.profiles.findOne({ userId });
+  findProfileByUserId(userId: ObjectId, session?: ClientSession) {
+    return this.profiles.findOne({ userId }, { session });
+  }
+
+  /** A team member becoming a student: the fields sign-up sets on the account it completes. */
+  completeAsStudent(userId: ObjectId, set: Pick<UserDoc, 'firstName' | 'lastName' | 'passwordHash' | 'phoneVerifiedAt' | 'terms' | 'login' | 'updatedAt'>, session: ClientSession) {
+    return this.users.findOneAndUpdate({ _id: userId }, { $set: set }, { session, returnDocument: 'after' });
   }
 
   findProfileByStudentNumber(studentNumber: string) {
@@ -99,12 +104,17 @@ export class AccountsRepository {
     return (await this.profiles.find(filter, { projection: { userId: 1 } }).toArray()).map((p) => p.userId);
   }
 
-  updateProfile(userId: ObjectId, patch: Partial<Pick<StudentProfileDoc, 'onCampus' | 'village' | 'room' | 'ufr' | 'region' | 'identity'>>, now: Date) {
+  updateProfile(userId: ObjectId, patch: Partial<Pick<StudentProfileDoc, 'campus' | 'onCampus' | 'village' | 'room' | 'ufr' | 'region' | 'identity' | 'cardReadAt'>>, now: Date) {
     return this.profiles.findOneAndUpdate({ userId }, { $set: { ...patch, updatedAt: now } }, { returnDocument: 'after' });
   }
 
   setNotificationPrefs(userId: ObjectId, prefs: NotificationPrefs, now: Date) {
     return this.users.updateOne({ _id: userId }, { $set: { notificationPrefs: prefs, updatedAt: now } });
+  }
+
+  /** A new login number; refunds and payouts follow it when they went to the old one. */
+  setPhone(userId: ObjectId, phone: string, payoutToo: boolean, now: Date) {
+    return this.users.updateOne({ _id: userId }, { $set: { phone, phoneVerifiedAt: now, ...(payoutToo ? { 'payoutAccount.phone': phone } : {}), updatedAt: now } });
   }
 
   /** Self-service fields of the user document (e-mail, location). */

@@ -1,20 +1,23 @@
 import type { FastifyInstance, preHandlerHookHandler } from 'fastify';
-import type { Db } from 'mongodb';
+import type { Db, ObjectId } from 'mongodb';
 
 import { actorOf } from '../../platform/auth/auth.js';
 import type { Clock } from '../../platform/clock.js';
 import { errors } from '../../platform/http/errors.js';
 import { toObjectId } from '../../platform/http/schemas.js';
 import type { AuditApi } from '../audit/index.js';
+import type { MediaApi } from '../media/index.js';
+import type { NotificationsApi } from '../notifications/index.js';
 import { accountsCollections, accountsMigrations } from './accounts.collections.js';
 import { AccountsRepository } from './accounts.repository.js';
 import { registerAccountsRoutes } from './accounts.routes.js';
 import { AccountsService } from './accounts.service.js';
+import { PlatformTeam, registerTeamRoutes } from './accounts.team.js';
 import type { OrganizationsPort, PlatformRole } from './accounts.types.js';
 
 export type { StudentCard } from './accounts.service.js';
 export type { Audience, AudienceProfile, Campus, NewStudentAccount, OrganizationsPort, MembershipSummary, PlatformRole, Region, UfrCode, UserDoc } from './accounts.types.js';
-export { CAMPUS_LABELS, CAMPUSES, PLATFORM_ROLES, REGIONS, UFR_CODES, UFRS, VILLAGES } from './accounts.types.js';
+export { CAMPUS_LABELS, CAMPUSES, PLATFORM_ROLE_LABELS, PLATFORM_ROLES, REGIONS, UFR_CODES, UFRS, VILLAGES } from './accounts.types.js';
 export type { StudentProfileInput } from './accounts.service.js';
 export { CampusSchema, RegionInput, UfrInput } from './accounts.schemas.js';
 export { accountsCollections, accountsMigrations };
@@ -22,20 +25,23 @@ export { accountsCollections, accountsMigrations };
 /** Public surface of the accounts module. Other modules get this object, never the repository. */
 export type AccountsApi = Pick<
   AccountsService,
-  | 'normalizeStudentNumber' | 'normalizeName' | 'residence' | 'phoneOrThrow' | 'availability' | 'createStudentAccount'
+  | 'normalizeStudentNumber' | 'normalizeName' | 'residence' | 'phoneOrThrow' | 'availability' | 'canRegister' | 'createStudentAccount'
   | 'origin' | 'audienceOf' | 'userIdsInAudience' | 'studentByNumber' | 'searchStudents'
   | 'findForLogin' | 'findByPhone' | 'findById' | 'namesByIds' | 'contactsByIds' | 'hasStudentProfile' | 'notificationPrefsByIds' | 'recordLoginFailure' | 'recordLoginSuccess' | 'setPassword'
-  | 'createStaffUser' | 'setPlatformRoles'
+  | 'createStaffUser' | 'setPlatformRoles' | 'hasAnySpace' | 'hasPlatformRole' | 'markCardRead' | 'changePhone' | 'setAvatar'
 > & {
   requireStudent: preHandlerHookHandler;
   requirePlatformRole(role: PlatformRole): preHandlerHookHandler;
   /** Any of these roles (admins always pass). */
   requireAnyPlatformRole(roles: PlatformRole[]): preHandlerHookHandler;
+  /** The public restaurants a menu publisher handles; null: all (admins). */
+  restosOf(userId: ObjectId): Promise<ObjectId[] | null>;
   registerRoutes(app: FastifyInstance): void;
 };
 
-export function createAccountsModule(deps: { db: Db; clock: Clock; audit: AuditApi; organizations: () => OrganizationsPort }): AccountsApi {
+export function createAccountsModule(deps: { db: Db; clock: Clock; audit: AuditApi; organizations: () => OrganizationsPort; notifications: () => NotificationsApi; media: () => Pick<MediaApi, 'claim'> }): AccountsApi {
   const service = new AccountsService(new AccountsRepository(deps.db), deps.clock, deps.organizations);
+  const team = new PlatformTeam(deps.db, deps.clock, service, deps.notifications);
 
   const requireStudent: preHandlerHookHandler = async (req) => {
     if (!(await service.hasStudentProfile(toObjectId(actorOf(req).userId)))) throw errors.forbidden('Réservé aux étudiants.');
@@ -60,6 +66,7 @@ export function createAccountsModule(deps: { db: Db; clock: Clock; audit: AuditA
     searchStudents: (w, l) => service.searchStudents(w, l),
     userIdsInAudience: (a) => service.userIdsInAudience(a),
     availability: (p, n) => service.availability(p, n),
+    canRegister: (p) => service.canRegister(p),
     createStudentAccount: (i, s) => service.createStudentAccount(i, s),
     findForLogin: (i) => service.findForLogin(i),
     findByPhone: (p, s) => service.findByPhone(p, s),
@@ -72,10 +79,19 @@ export function createAccountsModule(deps: { db: Db; clock: Clock; audit: AuditA
     recordLoginSuccess: (id) => service.recordLoginSuccess(id),
     setPassword: (id, h, s) => service.setPassword(id, h, s),
     createStaffUser: (i) => service.createStaffUser(i),
+    hasAnySpace: (u) => service.hasAnySpace(u),
+    markCardRead: (u) => service.markCardRead(u),
+    changePhone: (u, p) => service.changePhone(u, p),
+    setAvatar: (u, a) => service.setAvatar(u, a),
+    hasPlatformRole: (u, r) => service.hasPlatformRole(u, r),
     setPlatformRoles: (id, r) => service.setPlatformRoles(id, r),
     requireStudent,
     requirePlatformRole,
     requireAnyPlatformRole,
-    registerRoutes: (app) => registerAccountsRoutes(app, { service, audit: deps.audit, requireStudent, requireAdmin: requirePlatformRole('admin') }),
+    restosOf: (u) => team.restosOf(u),
+    registerRoutes: (app) => {
+      registerAccountsRoutes(app, { service, audit: deps.audit, requireStudent, requireAdmin: requirePlatformRole('admin'), claimImage: (u, id) => deps.media().claim(u, [id]).then((r) => r[0]!) });
+      registerTeamRoutes(app, { team, audit: deps.audit, requireAdmin: requirePlatformRole('admin') });
+    },
   };
 }

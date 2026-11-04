@@ -1,6 +1,7 @@
 import type { ObjectId } from 'mongodb';
 
-export type OtpPurpose = 'register' | 'reset_password';
+/** change_phone: the code goes to the new number, before it replaces the old one. */
+export type OtpPurpose = 'register' | 'reset_password' | 'change_phone';
 export type OtpChannel = 'sms' | 'whatsapp' | 'email';
 
 export type OtpChallengeDoc = {

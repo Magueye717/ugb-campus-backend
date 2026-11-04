@@ -59,3 +59,21 @@ export type PublicMenuDoc = {
 };
 
 export type DishInput = { id?: string; name: string; detail?: string; status?: DishStatus };
+
+/**
+ * The dishes the catering staff pick from when composing a menu: predefined ones (seeded) and every dish a publisher
+ * typed once. One per name (`key`: lowercased, spaces collapsed).
+ */
+export type PublicDishDoc = {
+  _id: ObjectId;
+  key: string;
+  name: string;
+  /** The latest detail used: "Riz au poisson". */
+  detail: string;
+  /** The meals it has been served at (suggested first there). */
+  meals: Meal[];
+  /** How many menus have included it: the most served come first. */
+  uses: number;
+  createdAt: Date;
+  updatedAt: Date;
+};

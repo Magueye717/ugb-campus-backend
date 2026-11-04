@@ -110,7 +110,7 @@ export class BannersService {
     if (input.kind === 'event') {
       if (!input.orgId || !input.eventId || !ObjectId.isValid(input.orgId) || !ObjectId.isValid(input.eventId)) throw errors.validation('Choisis ton événement.', { field: 'eventId' });
       orgId = new ObjectId(input.orgId);
-      if (!(await this.organizations.roleIn(orgId, ownerId, ['owner', 'manager']))) throw errors.forbidden('Seuls les responsables de l’organisation peuvent promouvoir ses événements.');
+      if (!(await this.organizations.roleIn(orgId, ownerId, ['owner', 'manager'], 'organizer'))) throw errors.forbidden('Seuls les responsables de l’organisation peuvent promouvoir ses événements.');
       const e = await this.events.promotable(orgId, new ObjectId(input.eventId));
       eventId = e._id;
       // One banner at a time per event: a new one once the current one has ended (or was refused, cancelled…).

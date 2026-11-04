@@ -79,6 +79,12 @@ export type EventInput = {
   maxPerStudent?: number;
 };
 
+/**
+ * What students see of an event's organizer: an entity (association, company) by its name; a person organizing on
+ * their own (their personal entity is named after them) without a name: no owner's name on the event page.
+ */
+const shownOrganizer = (o: OrgCard): OrgCard => (o.category === 'Étudiant' ? { ...o, name: '' } : o);
+
 export class EventsService {
   private readonly events: Collection<EventDoc>;
   private readonly bookings: Collection<EventBookingDoc>;
@@ -130,7 +136,7 @@ export class EventsService {
         const payment = held?.paymentId ? await this.payments.findById(held.paymentId) : null;
         const bought = my.reduce((n, b) => n + b.units.filter((u) => u.status === 'confirmed' || u.status === 'held').length, 0);
         return {
-          ...this.publicView(e, cards.get(e.orgId.toHexString())!, now),
+          ...this.publicView(e, shownOrganizer(cards.get(e.orgId.toHexString())!), now),
           myTickets: my.filter((b) => b.status === 'confirmed').flatMap((b) => b.units.filter((u) => u.status === 'confirmed' && u.ticketId).map((u) => u.ticketId!.toHexString())),
           myTicketsLeft: Math.max(0, e.maxPerStudent - bought),
           myBooking: held
@@ -461,7 +467,8 @@ export class EventsService {
     }
     const now = this.clock.now();
     if (e.salesCloseAt <= now) throw errors.rule('EVENT_TOO_SOON', 'Trop tard pour ouvrir la billetterie.');
-    const verified = await this.organizations.can(orgId, 'events');
+    // A student's own entity always goes through the admins' review, whatever its capabilities.
+    const verified = (await this.organizations.can(orgId, 'events')) && !(await this.organizations.isPersonal(orgId));
     await this.events.updateOne(
       { _id: id, status: e.status },
       verified
@@ -624,7 +631,10 @@ export class EventsService {
   async personalOrgOf(userId: ObjectId, create: boolean) {
     const user = await this.accounts.findById(userId);
     if (!user) throw errors.unauthenticated();
-    return this.organizations.personalOrg(user, create);
+    const orgId = await this.organizations.personalOrg(user, create);
+    // Their events open the organizer space, even when they already run their own shop.
+    if (orgId && create) await this.organizations.addCapability(orgId, 'events');
+    return orgId;
   }
 
   /** Before it starts. Every ticket is refunded 100 %; places being paid are released. */

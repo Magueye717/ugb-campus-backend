@@ -4,7 +4,7 @@ import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
 import { errors } from '../../platform/http/errors.js';
-import { IdParams, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
+import { IdParams, Nullable, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
 import { CAMPUSES, REGIONS, UFR_CODES, VILLAGES } from '../accounts/index.js';
 import type { AuditApi } from '../audit/index.js';
 import type { OrgRole } from '../organizations/index.js';
@@ -12,7 +12,6 @@ import { PAYMENT_METHODS, PaymentView, paymentView, PayoutView, payoutView } fro
 import type { EventsService } from './events.service.js';
 import { EVENT_CATEGORIES, PUBLICATION_FEE } from './events.types.js';
 
-const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
 const Organizer = Type.Object({ id: Type.String(), slug: Type.String(), name: Type.String(), category: Type.String(), level: Type.String(), rating: Nullable(Type.Number()), trips: Type.Number(), logoUrl: Nullable(Type.String()) });
 const Base = {
   id: Type.String(),
@@ -110,14 +109,14 @@ const EventInput = Type.Object(
 const OrgParams = Type.Object({ orgId: ObjectIdString }, { additionalProperties: false });
 const OrgEventParams = Type.Object({ orgId: ObjectIdString, id: ObjectIdString }, { additionalProperties: false });
 
-type Deps = { service: EventsService; audit: AuditApi; requireOrgRole: (roles: OrgRole[]) => preHandlerHookHandler; requireStudent: preHandlerHookHandler; requireAdmin: preHandlerHookHandler };
+type Deps = { service: EventsService; audit: AuditApi; requireOrgRole: (roles: OrgRole[], space?: 'organizer') => preHandlerHookHandler; requireStudent: preHandlerHookHandler; requireAdmin: preHandlerHookHandler };
 const baseUrlOf = (req: FastifyRequest) => `${req.protocol}://${req.host}`;
 
 export function registerEventsRoutes(root: FastifyInstance, { service, audit, requireOrgRole, requireStudent, requireAdmin }: Deps) {
   const app = root.withTypeProvider<TypeBoxTypeProvider>();
   const me = (req: FastifyRequest) => toObjectId(actorOf(req).userId);
   const tags = ['events'];
-  const org = (roles: OrgRole[]) => ({ preHandler: [requireAuth, requireOrgRole(roles)] });
+  const org = (roles: OrgRole[]) => ({ preHandler: [requireAuth, requireOrgRole(roles, 'organizer')] });
   const managers: OrgRole[] = ['owner', 'manager'];
   const crew: OrgRole[] = ['owner', 'manager', 'scanner'];
   const trace = (req: FastifyRequest, action: string, id: string, metadata?: Record<string, unknown>) =>

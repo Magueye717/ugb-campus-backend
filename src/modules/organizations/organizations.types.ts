@@ -12,11 +12,26 @@ export const ORG_LEVELS = ['nouveau', 'verifie', 'confirme'] as const;
 export const ORG_CAPABILITIES = ['caravans', 'restaurant', 'shop', 'events'] as const;
 /** owner: everything incl. team · manager: departures, menus, orders · scanner: boarding only · staff: restaurant orders. */
 export const ORG_ROLES = ['owner', 'manager', 'scanner', 'staff'] as const;
+/**
+ * The spaces of an organization in the app: one entity (Khoulé & frère) may run a restaurant, a shop and caravans,
+ * each its own space with its own team. Caravans and events share the organizer space.
+ */
+export const ORG_SPACES = ['organizer', 'restaurant', 'shop'] as const;
 
 export type OrgCategory = (typeof ORG_CATEGORIES)[number];
 export type OrgLevel = (typeof ORG_LEVELS)[number];
 export type OrgCapability = (typeof ORG_CAPABILITIES)[number];
 export type OrgRole = (typeof ORG_ROLES)[number];
+export type OrgSpace = (typeof ORG_SPACES)[number];
+
+/** The spaces an organization's capabilities open. Without a restaurant or shop, it organizes (caravans, events). */
+export function spacesOf(o: { capabilities: readonly string[] }): OrgSpace[] {
+  const out: OrgSpace[] = [];
+  if (o.capabilities.includes('caravans') || o.capabilities.includes('events') || !(o.capabilities.includes('restaurant') || o.capabilities.includes('shop'))) out.push('organizer');
+  if (o.capabilities.includes('restaurant')) out.push('restaurant');
+  if (o.capabilities.includes('shop')) out.push('shop');
+  return out;
+}
 
 export type OrganizationDoc = {
   _id: ObjectId;
@@ -42,6 +57,8 @@ export type MembershipDoc = {
   _id: ObjectId;
   orgId: ObjectId;
   userId: ObjectId;
+  /** One membership per space: a shop employee never works in the restaurant. The owner holds every space. */
+  space: OrgSpace;
   roles: OrgRole[];
   status: 'active' | 'revoked';
   grantedBy: ObjectId | null;

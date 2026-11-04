@@ -4,13 +4,12 @@ import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
 import { errors } from '../../platform/http/errors.js';
-import { IdParams, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
+import { IdParams, Nullable, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
 import type { AuditApi } from '../audit/index.js';
 import type { LostService } from './lost.service.js';
 import { CARD_TYPES } from './lost.ocr.js';
 import { CLAIM_ROLES, LOST_CATEGORIES, LOST_HOLDERS, LOST_STATUSES, LOST_WHEN } from './lost.types.js';
 
-const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
 const ItemView = Type.Object({
   id: Type.String(),
   status: Type.String({ description: LOST_STATUSES.join(' | ') }),

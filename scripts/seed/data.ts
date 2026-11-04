@@ -33,7 +33,12 @@ export const staff: { phone: string; firstName: string; lastName: string; platfo
   { phone: '770000005', firstName: 'Service', lastName: 'Communication', platformRoles: ['content_editor', 'resto_u_staff'] },
   // The academic team: its own announcements (exams, enrolments) in "Alertes campus".
   { phone: '770000006', firstName: 'Service', lastName: 'Scolarité', platformRoles: ['academic_editor'] },
+  // The super admin's data entry: places, restaurants and shops ("Référencement").
+  { phone: '770000007', firstName: 'Ndeye', lastName: 'Fall', platformRoles: ['place_editor', 'restaurant_editor', 'shop_editor'] },
 ];
+
+/** Which public restaurants each menu publisher handles (by phone → restaurant slugs). */
+export const restoAssignments: Record<string, string[]> = { '770000004': ['resto-1'], '770000005': ['resto-1', 'resto-2', 'resto-3'], '781112233': ['resto-2'] };
 
 type SeedDish = { name: string; detail: string; status?: 'available' | 'low' | 'out' };
 
@@ -216,20 +221,21 @@ const campusDrinks = [drink('Bissap', 'Jus d’hibiscus · 33 cl', 300), drink('
 export const businesses: {
   kind: 'restaurant' | 'shop';
   name: string;
-  specialty: string;
+  specialties: string[];
   description: string;
   owner: { phone: string; firstName: string; lastName: string };
   address: string;
   campus: Campus;
   location: { lat: number; lng: number };
   services: { start: string; end: string }[];
-  deliveryFee: number | null;
+  /** FCFA per zone (campus 1, campus 2, outside); null: no delivery there. */
+  deliveryFees: { campus1: number | null; campus2: number | null; outside: number | null };
   colors: readonly [string, string];
   items: SeedItem[];
 }[] = [
   {
-    kind: 'restaurant', name: 'Khoulé & Frère', specialty: 'Sénégalais', description: 'Les plats du pays, comme à la maison.', owner: { phone: '770000010', firstName: 'Ousmane', lastName: 'Khoulé' },
-    address: 'Près du Village E', campus: 'campus1', location: { lat: 16.0603, lng: -16.4262 }, services: [{ start: '12:00', end: '15:00' }, { start: '19:00', end: '22:00' }], deliveryFee: 200, colors: ['#B45309', '#F59E0B'],
+    kind: 'restaurant', name: 'Khoulé & Frère', specialties: ['Sénégalais'], description: 'Les plats du pays, comme à la maison.', owner: { phone: '770000010', firstName: 'Ousmane', lastName: 'Khoulé' },
+    address: 'Près du Village E', campus: 'campus1', location: { lat: 16.0603, lng: -16.4262 }, services: [{ start: '12:00', end: '15:00' }, { start: '19:00', end: '22:00' }], deliveryFees: { campus1: 200, campus2: 300, outside: 500 }, colors: ['#B45309', '#F59E0B'],
     items: [
       { section: 'menu', name: 'Mafé yap', detail: 'Riz · sauce arachide', price: 1500 },
       { section: 'menu', name: 'Thiébou dieun', detail: 'Riz au poisson', price: 1800 },
@@ -238,28 +244,28 @@ export const businesses: {
     ],
   },
   {
-    kind: 'restaurant', name: 'Chez Marie', specialty: 'Grillades', description: 'Poulet braisé et dibi le soir.', owner: { phone: '770000011', firstName: 'Marie', lastName: 'Sène' },
-    address: 'Campus 1 · pavillon A', campus: 'campus1', location: { lat: 16.0611, lng: -16.4249 }, services: [{ start: '12:00', end: '15:00' }, { start: '19:00', end: '23:00' }], deliveryFee: null, colors: ['#9A3412', '#FB923C'],
+    kind: 'restaurant', name: 'Chez Marie', specialties: ['Grillades'], description: 'Poulet braisé et dibi le soir.', owner: { phone: '770000011', firstName: 'Marie', lastName: 'Sène' },
+    address: 'Campus 1 · pavillon A', campus: 'campus1', location: { lat: 16.0611, lng: -16.4249 }, services: [{ start: '12:00', end: '15:00' }, { start: '19:00', end: '23:00' }], deliveryFees: { campus1: null, campus2: null, outside: null }, colors: ['#9A3412', '#FB923C'],
     items: [{ section: 'menu', name: 'Poulet braisé', detail: 'Frites · salade', price: 2000 }, { section: 'menu', name: 'Dibi agneau', detail: 'Oignons · moutarde', price: 2500 }, drink('Jus d’orange', 'Pressé · 33 cl', 500)],
   },
   {
-    kind: 'restaurant', name: 'Le Goût', specialty: 'Plats du jour', description: 'Un plat différent chaque jour, près de la BU.', owner: { phone: '770000012', firstName: 'Abdou', lastName: 'Ndiaye' },
-    address: 'Campus 1 · près de la BU', campus: 'campus1', location: { lat: 16.0629, lng: -16.4232 }, services: [{ start: '12:00', end: '16:00' }], deliveryFee: 150, colors: ['#166534', '#4ADE80'],
+    kind: 'restaurant', name: 'Le Goût', specialties: ['Plats du jour'], description: 'Un plat différent chaque jour, près de la BU.', owner: { phone: '770000012', firstName: 'Abdou', lastName: 'Ndiaye' },
+    address: 'Campus 1 · près de la BU', campus: 'campus1', location: { lat: 16.0629, lng: -16.4232 }, services: [{ start: '12:00', end: '16:00' }], deliveryFees: { campus1: 150, campus2: 250, outside: 450 }, colors: ['#166534', '#4ADE80'],
     items: [{ section: 'menu', name: 'Domoda', detail: 'Riz · sauce tomate', price: 1500 }, { section: 'menu', name: 'Soupe kandia', detail: 'Riz · gombo', price: 1700 }, ...campusDrinks],
   },
   {
-    kind: 'restaurant', name: 'Chez Fatou', specialty: 'Riz & sauces', description: 'À l’entrée du campus 2.', owner: { phone: '770000013', firstName: 'Fatou', lastName: 'Sarr' },
-    address: 'Campus 2 · entrée', campus: 'campus2', location: { lat: 16.0571, lng: -16.4271 }, services: [{ start: '12:00', end: '15:00' }, { start: '19:00', end: '21:00' }], deliveryFee: 0, colors: ['#5B21B6', '#A78BFA'],
+    kind: 'restaurant', name: 'Chez Fatou', specialties: ['Riz & sauces'], description: 'À l’entrée du campus 2.', owner: { phone: '770000013', firstName: 'Fatou', lastName: 'Sarr' },
+    address: 'Campus 2 · entrée', campus: 'campus2', location: { lat: 16.0571, lng: -16.4271 }, services: [{ start: '12:00', end: '15:00' }, { start: '19:00', end: '21:00' }], deliveryFees: { campus1: 0, campus2: 100, outside: 300 }, colors: ['#5B21B6', '#A78BFA'],
     items: [{ section: 'menu', name: 'Mafé', detail: 'Riz · sauce arachide', price: 1500 }, { section: 'menu', name: 'Thiou carry', detail: 'Riz · poulet', price: 1600 }, ...campusDrinks],
   },
   {
-    kind: 'restaurant', name: 'Le Coin du Village E', specialty: 'Snacks', description: 'Chawarmas et burgers jusqu’à 22h.', owner: { phone: '770000014', firstName: 'Ibou', lastName: 'Diagne' },
-    address: 'Village E', campus: 'campus1', location: { lat: 16.0599, lng: -16.4266 }, services: [{ start: '10:00', end: '22:00' }], deliveryFee: 100, colors: ['#1E3A8A', '#60A5FA'],
+    kind: 'restaurant', name: 'Le Coin du Village E', specialties: ['Snacks'], description: 'Chawarmas et burgers jusqu’à 22h.', owner: { phone: '770000014', firstName: 'Ibou', lastName: 'Diagne' },
+    address: 'Village E', campus: 'campus1', location: { lat: 16.0599, lng: -16.4266 }, services: [{ start: '10:00', end: '22:00' }], deliveryFees: { campus1: 100, campus2: 200, outside: 400 }, colors: ['#1E3A8A', '#60A5FA'],
     items: [{ section: 'menu', name: 'Chawarma', detail: 'Poulet · crudités', price: 1000 }, { section: 'menu', name: 'Burger frites', detail: 'Bœuf · fromage', price: 1500 }, { section: 'menu', name: 'Pain thon', detail: 'Thon · oignons', price: 500 }, drink('Jus d’orange', 'Pressé · 33 cl', 500)],
   },
   {
-    kind: 'shop', name: 'Papeterie du Campus', specialty: 'Fournitures', description: 'Cahiers, stylos, impressions et reliures.', owner: { phone: '770000015', firstName: 'Aliou', lastName: 'Ba' },
-    address: 'Sous la BU', campus: 'campus1', location: { lat: 16.0627, lng: -16.4229 }, services: [{ start: '08:00', end: '20:00' }], deliveryFee: null, colors: ['#0F766E', '#5EEAD4'],
+    kind: 'shop', name: 'Papeterie du Campus', specialties: ['Fournitures'], description: 'Cahiers, stylos, impressions et reliures.', owner: { phone: '770000015', firstName: 'Aliou', lastName: 'Ba' },
+    address: 'Sous la BU', campus: 'campus1', location: { lat: 16.0627, lng: -16.4229 }, services: [{ start: '08:00', end: '20:00' }], deliveryFees: { campus1: null, campus2: null, outside: null }, colors: ['#0F766E', '#5EEAD4'],
     items: [
       { section: 'article', category: 'Fournitures', name: 'Cahier 200 pages', detail: 'Grands carreaux', price: 600, stock: 40 },
       { section: 'article', category: 'Fournitures', name: 'Stylo bleu', detail: 'Lot de 4', price: 400, stock: 60 },
@@ -268,8 +274,8 @@ export const businesses: {
     ],
   },
   {
-    kind: 'shop', name: 'Boutique du Village C', specialty: 'Épicerie', description: 'Le quotidien, crédit et boissons fraîches.', owner: { phone: '770000016', firstName: 'Mame', lastName: 'Diouf' },
-    address: 'Entre les villages C et D', campus: 'campus1', location: { lat: 16.0598, lng: -16.4247 }, services: [{ start: '07:00', end: '23:00' }], deliveryFee: 100, colors: ['#BE185D', '#F9A8D4'],
+    kind: 'shop', name: 'Boutique du Village C', specialties: ['Épicerie'], description: 'Le quotidien, crédit et boissons fraîches.', owner: { phone: '770000016', firstName: 'Mame', lastName: 'Diouf' },
+    address: 'Entre les villages C et D', campus: 'campus1', location: { lat: 16.0598, lng: -16.4247 }, services: [{ start: '07:00', end: '23:00' }], deliveryFees: { campus1: 100, campus2: 200, outside: 400 }, colors: ['#BE185D', '#F9A8D4'],
     items: [
       { section: 'article', category: 'Épicerie', name: 'Pain', detail: 'Baguette', price: 150, stock: 80 },
       { section: 'article', category: 'Épicerie', name: 'Lait en poudre', detail: 'Sachet 400 g', price: 1800, stock: 20 },

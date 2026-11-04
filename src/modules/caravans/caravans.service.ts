@@ -9,7 +9,7 @@ import type { Limiter } from '../../platform/security/limiter.js';
 import type { AccountsApi } from '../accounts/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
 import type { OrgCard, OrganizationsApi } from '../organizations/index.js';
-import type { PaymentDoc, PaymentMethod, PaymentsApi, PayoutDoc, PurposeHandler } from '../payments/index.js';
+import { PAYMENT_METHODS, type PaymentDoc, type PaymentMethod, type PaymentsApi, type PayoutDoc, type PurposeHandler } from '../payments/index.js';
 import type { TicketingApi, TicketKindHandler } from '../ticketing/index.js';
 import {
   BOARDING_GRACE_MS,
@@ -47,6 +47,8 @@ const localPhone = (phone: string) => phone.replace(/^\+221(\d{2})(\d{3})(\d{2})
 export type StopInput = { place: string; at: string };
 export type NewDeparture = {
   vehicleId: string;
+  /** Accepted providers; default: all. */
+  paymentMethods?: PaymentMethod[];
   direction: Direction;
   from: string;
   to: string;
@@ -154,6 +156,7 @@ export class CaravansService {
       dropoffs: d.dropoffs.map(stopView),
       price: d.price,
       maxSeatsPerStudent: d.maxSeatsPerStudent,
+      paymentMethods: d.paymentMethods ?? [...PAYMENT_METHODS],
       totalSeats: sellable(d.vehicle),
       seatsFree: Math.max(0, sellable(d.vehicle) - d.seatsTaken),
       seatsBooked: d.seatsConfirmed,
@@ -201,6 +204,7 @@ export class CaravansService {
     this.payments.assertAvailable(input.method);
     const returnUrl = this.payments.validateReturnUrl(input.returnUrl);
     const d = await this.get(departureId);
+    if (d.paymentMethods && !d.paymentMethods.includes(input.method)) throw errors.validation(`Ce départ n’accepte pas ${input.method === 'wave' ? 'Wave' : 'Orange Money'}.`, { field: 'method' });
     const now = this.clock.now();
     if (!(d.status === 'published' || d.status === 'confirmed') || now >= d.bookingClosesAt) {
       throw errors.conflict('BOOKING_CLOSED', 'Les réservations sont fermées pour ce départ.');
@@ -740,6 +744,7 @@ export class CaravansService {
       departureAt,
       price: input.price,
       maxSeatsPerStudent: input.maxSeatsPerStudent ?? DEFAULT_MAX_SEATS_PER_STUDENT,
+      paymentMethods: input.paymentMethods?.length ? [...new Set(input.paymentMethods)] : [...PAYMENT_METHODS],
       minPassengers: input.minPassengers,
       confirmBy,
       bookingClosesAt,

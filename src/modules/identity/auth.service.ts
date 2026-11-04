@@ -62,13 +62,17 @@ export class AuthService {
     assertChannelAvailable(input.channel);
     const phone = this.accounts.phoneOrThrow(input.phone);
     const existing = await this.accounts.findByPhone(phone);
-    if (input.purpose === 'register' && existing) throw errors.conflict('PHONE_TAKEN', 'Ce numéro a déjà un compte.');
+    // Sign-up: a number with a non-student account (a team member) may complete it into a student account.
+    if (input.purpose === 'register' && !(await this.accounts.canRegister(phone))) throw errors.conflict('PHONE_TAKEN', 'Ce numéro a déjà un compte.');
+    if (input.purpose === 'change_phone' && existing) throw errors.conflict('PHONE_TAKEN', 'Ce numéro a déjà un compte.');
     // Reset: no code for a number without an account (same openness as sign-in, see 09-decisions.md).
     if (input.purpose === 'reset_password' && !existing) throw ACCOUNT_NOT_FOUND();
     return this.otp.create({ phone, purpose: input.purpose, channel: input.channel, ip: ctx.ip });
   }
 
   async register(input: RegisterInput, ctx: Ctx): Promise<{ userId: ObjectId; tokens: Tokens }> {
+    // A space typed by the keyboard around a password is never part of it.
+    input = { ...input, password: input.password.trim() };
     const problem = passwordProblem(input.password);
     if (problem) throw errors.validation(problem, { field: 'password' });
     const studentNumber = this.accounts.normalizeStudentNumber(input.studentNumber);
@@ -85,7 +89,9 @@ export class AuthService {
         session,
       );
     });
-    await this.audit.record({ actor: { type: 'user', id: user._id.toHexString() }, action: 'account.register', target: { type: 'user', id: user._id.toHexString() }, requestId: ctx.requestId, ip: ctx.ip });
+    // A team member's account completed: their password changed, so their other sessions end (as after a reset).
+    if (user.linked) await this.sessions.revokeAll(user._id);
+    await this.audit.record({ actor: { type: 'user', id: user._id.toHexString() }, action: user.linked ? 'account.register_linked' : 'account.register', target: { type: 'user', id: user._id.toHexString() }, requestId: ctx.requestId, ip: ctx.ip });
     const tokens = await this.sessions.start(user, input.device ?? {}, ctx.ip);
     return { userId: user._id, tokens };
   }
@@ -96,12 +102,17 @@ export class AuthService {
 
     const user = await this.accounts.findForLogin(input.identifier);
     if (!user || !user.passwordHash) throw ACCOUNT_NOT_FOUND();
+    // Removed from every team and no student profile: as if the number had no account.
+    if (!(await this.accounts.hasAnySpace(user._id))) throw ACCOUNT_NOT_FOUND();
     const now = this.clock.now();
     if (user.login.lockedUntil && user.login.lockedUntil > now) {
       const wait = Math.ceil((user.login.lockedUntil.getTime() - now.getTime()) / 1000);
       throw errors.tooMany('Trop de tentatives. Réessaie plus tard.', wait);
     }
-    if (!(await verifyPassword(user.passwordHash, input.password))) {
+    // Trimmed like at sign-up; an account created before trimming keeps working with its exact password.
+    const typed = input.password.trim();
+    const ok = (await verifyPassword(user.passwordHash, typed)) || (typed !== input.password && (await verifyPassword(user.passwordHash, input.password)));
+    if (!ok) {
       const lockedUntil = await this.accounts.recordLoginFailure(user._id);
       if (lockedUntil) {
         await this.audit.record({ actor: { type: 'system' }, action: 'account.login_locked', target: { type: 'user', id: user._id.toHexString() }, requestId: ctx.requestId, ip: ctx.ip, metadata: { until: lockedUntil } });
@@ -111,7 +122,7 @@ export class AuthService {
     if (user.status !== 'active') throw errors.forbidden('Ce compte est suspendu. Contacte le support.');
 
     await this.accounts.recordLoginSuccess(user._id);
-    if (needsRehash(user.passwordHash)) await this.accounts.setPassword(user._id, await hashPassword(input.password));
+    if (needsRehash(user.passwordHash)) await this.accounts.setPassword(user._id, await hashPassword(typed));
     await this.limiter.reset(`login:id:${key}`);
     await this.audit.record({ actor: { type: 'user', id: user._id.toHexString() }, action: 'account.login', target: { type: 'user', id: user._id.toHexString() }, requestId: ctx.requestId, ip: ctx.ip });
     return { userId: user._id, tokens: await this.sessions.start(user, input.device ?? {}, ctx.ip) };
@@ -131,7 +142,15 @@ export class AuthService {
   }
 
   /** "Mot de passe oublié": verified phone → new password, every session ends. */
+  /** The new number, proven by its code, replaces the old one (sign-in, and refunds when they went to the old one). */
+  async changePhone(userId: ObjectId, verificationToken: string, ctx: Ctx) {
+    const { phone } = await this.otp.consume(verificationToken, 'change_phone');
+    await this.accounts.changePhone(userId, phone);
+    await this.audit.record({ actor: { type: 'user', id: userId.toHexString() }, action: 'account.phone_changed', target: { type: 'user', id: userId.toHexString() }, requestId: ctx.requestId, ip: ctx.ip });
+  }
+
   async resetPassword(input: { verificationToken: string; newPassword: string }, ctx: Ctx) {
+    input = { ...input, newPassword: input.newPassword.trim() };
     const problem = passwordProblem(input.newPassword);
     if (problem) throw errors.validation(problem, { field: 'newPassword' });
     const passwordHash = await hashPassword(input.newPassword);
@@ -148,6 +167,7 @@ export class AuthService {
   }
 
   async changePassword(userId: ObjectId, sessionId: string, input: { currentPassword: string; newPassword: string }, ctx: Ctx) {
+    input = { ...input, newPassword: input.newPassword.trim() };
     const user = await this.accounts.findById(userId);
     if (!user?.passwordHash || !(await verifyPassword(user.passwordHash, input.currentPassword))) {
       throw errors.validation('Mot de passe actuel incorrect.', { field: 'currentPassword' });

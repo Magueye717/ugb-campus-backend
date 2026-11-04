@@ -43,6 +43,7 @@ export const caravansCollections: CollectionSpec[] = [
           departureAt: bson.date,
           price: bson.int({ minimum: 100, maximum: 100_000 }),
           maxSeatsPerStudent: bson.int({ minimum: 1, maximum: MAX_SEATS_PER_STUDENT }),
+          paymentMethods: bson.array(bson.enumOf(PAYMENT_METHODS), { minItems: 1 }),
           minPassengers: bson.int({ minimum: 0 }),
           confirmBy: bson.date,
           bookingClosesAt: bson.date,
@@ -100,6 +101,13 @@ export const caravansCollections: CollectionSpec[] = [
 ];
 
 export const caravansMigrations: DataMigration[] = [
+  {
+    id: '2026-11-04-departures-payment-methods',
+    description: 'Departures accept the providers chosen by the organizer: every provider for the existing ones.',
+    async up(db) {
+      await db.collection('departures').updateMany({ paymentMethods: { $exists: false } }, { $set: { paymentMethods: [...PAYMENT_METHODS] } });
+    },
+  },
   {
     id: '2026-11-01-caravans-seats-per-student',
     description: 'Departures get maxSeatsPerStudent (2); bookings get orderId (= _id), slot 1, passenger null, forSelf; the one-purchase index is replaced by slots.',

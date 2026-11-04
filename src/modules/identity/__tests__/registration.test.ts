@@ -102,7 +102,7 @@ describe('sign-up', () => {
     expect(res.statusCode).toBe(201);
     const me = json(await t.app.inject({ url: '/api/v1/me', headers: { authorization: `Bearer ${json(res).tokens.accessToken}` } }));
     expect(me.student).toMatchObject({ studentNumber: 'P777001', room: 'C12', ufr: 'SEG', region: 'Ziguinchor', verified: false });
-    expect(me.spaces).toEqual(['student']);
+    expect(me.spaces).toEqual([{ key: 'student', type: 'student', kind: null, orgId: null, name: 'Étudiant', roles: [], logoUrl: null, personal: false }]);
   });
 
   it('asks the UFR and the home region; the profile can change them; the lists are public', async () => {

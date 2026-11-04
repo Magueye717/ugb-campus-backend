@@ -1,5 +1,5 @@
 import type { FastifyInstance, preHandlerHookHandler } from 'fastify';
-import type { Db, ObjectId } from 'mongodb';
+import { ObjectId, type Db } from 'mongodb';
 
 import { actorOf } from '../../platform/auth/auth.js';
 import type { Clock } from '../../platform/clock.js';
@@ -7,24 +7,31 @@ import { errors } from '../../platform/http/errors.js';
 import { toObjectId } from '../../platform/http/schemas.js';
 import type { AccountsApi, OrganizationsPort } from '../accounts/index.js';
 import type { AuditApi } from '../audit/index.js';
+import type { NotificationsApi } from '../notifications/index.js';
 import { organizationsCollections, organizationsMigrations } from './organizations.collections.js';
 import { registerOrganizationsRoutes } from './organizations.routes.js';
 import { OrganizationsService, type CreateOrgInput } from './organizations.service.js';
-import type { OrgCapability, OrgRole } from './organizations.types.js';
+import { ORG_SPACES, type OrgCapability, type OrgRole, type OrgSpace } from './organizations.types.js';
 
 export { organizationsCollections, organizationsMigrations };
-export type { OrgCapability, OrgRole, OrgLevel, OrgCategory } from './organizations.types.js';
+export type { OrgCapability, OrgRole, OrgLevel, OrgCategory, OrgSpace } from './organizations.types.js';
+export { ORG_SPACES, spacesOf } from './organizations.types.js';
 export type { OrgCard } from './organizations.service.js';
 
 export type OrganizationsApi = OrganizationsPort & {
-  /** Guard for /org/:orgId/... routes: 404 unless the caller holds one of `roles` there (no existence oracle). */
-  requireOrgRole(roles: OrgRole[]): preHandlerHookHandler;
+  /**
+   * Guard for /org/:orgId/... routes: 404 unless the caller holds one of `roles` in `space` (no existence oracle).
+   * `space: 'param'` reads it from the route (`/org/:orgId/:space/...`).
+   */
+  requireOrgRole(roles: OrgRole[], space?: OrgSpace | 'param'): preHandlerHookHandler;
   roleIn: OrganizationsService['roleIn'];
   create(input: CreateOrgInput): ReturnType<OrganizationsService['create']>;
   setMember: OrganizationsService['setMember'];
+  setOwner: OrganizationsService['setOwner'];
+  addCapability: OrganizationsService['addCapability'];
   cards: OrganizationsService['cards'];
-  /** Active members and their roles: who to notify (a restaurant's new order), who owns it. */
-  members(orgId: ObjectId): Promise<{ userId: ObjectId; roles: OrgRole[] }[]>;
+  /** Active members of a space and their roles: who to notify (a restaurant's new order), who owns it. */
+  members(orgId: ObjectId, space: OrgSpace): Promise<{ userId: ObjectId; roles: OrgRole[] }[]>;
   /** Where an organization's claims are paid; null until an admin sets it. */
   payoutPhone(orgId: ObjectId): Promise<string | null>;
   /** Is the organization active and verified for this (e.g. selling event tickets)? */
@@ -35,27 +42,35 @@ export type OrganizationsApi = OrganizationsPort & {
    */
   personalOrg(user: { _id: ObjectId; firstName: string; lastName: string; phone: string }, create?: boolean): Promise<ObjectId | null>;
   isPersonal(orgId: ObjectId): Promise<boolean>;
+  /** The entities this person owns (active ones), and whether each is a student's own. */
+  ownedBy(userId: ObjectId): Promise<{ orgId: ObjectId; name: string; personal: boolean; organizer: boolean }[]>;
   /** Adds a finished trip to the organizer's count ("128 trajets effectués"). */
   countTrip(orgId: ObjectId): Promise<void>;
+  /** The students' average rating of its trips and events (ratings module). */
+  setRating(orgId: ObjectId, avg: number | null, count: number): Promise<void>;
   registerRoutes(app: FastifyInstance, requireAdmin: preHandlerHookHandler): void;
 };
 
-export function createOrganizationsModule(deps: { db: Db; clock: Clock; accounts: AccountsApi; audit: AuditApi }): OrganizationsApi {
-  const service = new OrganizationsService(deps.db, deps.clock, deps.accounts);
+export function createOrganizationsModule(deps: { db: Db; clock: Clock; accounts: AccountsApi; audit: AuditApi; notifications: () => NotificationsApi }): OrganizationsApi {
+  const service = new OrganizationsService(deps.db, deps.clock, deps.accounts, deps.notifications);
 
-  const requireOrgRole = (roles: OrgRole[]): preHandlerHookHandler => async (req) => {
-    const orgId = (req.params as { orgId?: string }).orgId;
-    if (!orgId) throw errors.notFound();
-    if (!(await service.roleIn(toObjectId(orgId), toObjectId(actorOf(req).userId), roles))) throw errors.notFound();
+  const requireOrgRole = (roles: OrgRole[], space?: OrgSpace | 'param'): preHandlerHookHandler => async (req) => {
+    const params = req.params as { orgId?: string; space?: string };
+    if (!params.orgId) throw errors.notFound();
+    const s = space === 'param' ? params.space : space;
+    if (space === 'param' && !ORG_SPACES.includes(s as OrgSpace)) throw errors.notFound();
+    if (!(await service.roleIn(toObjectId(params.orgId), toObjectId(actorOf(req).userId), roles, s as OrgSpace | undefined))) throw errors.notFound();
   };
 
   return {
     membershipsForUser: (userId) => service.membershipsForUser(userId),
-    roleIn: (o, u, r) => service.roleIn(o, u, r),
+    roleIn: (o, u, r, sp) => service.roleIn(o, u, r, sp),
     create: (i) => service.create(i),
-    setMember: (o, i, g) => service.setMember(o, i, g),
+    setMember: (o, sp, i, g) => service.setMember(o, sp, i, g),
+    setOwner: (o, p, g) => service.setOwner(o, p, g),
+    addCapability: (o, c) => service.addCapability(o, c),
     cards: (ids) => service.cards(ids),
-    members: async (orgId) => (await deps.db.collection('memberships').find({ orgId, status: 'active' }, { projection: { userId: 1, roles: 1 } }).toArray()).map((m) => ({ userId: m.userId, roles: m.roles })),
+    members: async (orgId, space) => (await deps.db.collection('memberships').find({ orgId, space, status: 'active' }, { projection: { userId: 1, roles: 1 } }).toArray()).map((m) => ({ userId: m.userId, roles: m.roles })),
     payoutPhone: async (orgId) => (await service.get(orgId)).payoutAccount?.phone ?? null,
     personalOrg: async (user, create = true) => {
       const slug = `etudiant-${user._id.toHexString()}`;
@@ -67,15 +82,21 @@ export function createOrganizationsModule(deps: { db: Db; clock: Clock; accounts
         if (again) return { _id: again._id };
         throw err;
       });
-      await service.setMember(org._id, { phone: user.phone, roles: ['owner'] }, null);
+      await service.setOwner(org._id, user.phone, null);
       return org._id;
     },
     isPersonal: async (orgId) => (await service.get(orgId).catch(() => null))?.category === 'Étudiant',
+    ownedBy: async (userId) => {
+      const owned = (await service.membershipsForUser(userId)).filter((m) => m.roles.includes('owner'));
+      const byOrg = new Map(owned.map((m) => [m.orgId, { orgId: new ObjectId(m.orgId), name: m.name, personal: m.category === 'Étudiant', organizer: m.capabilities.includes('caravans') || m.capabilities.includes('events') }]));
+      return [...byOrg.values()];
+    },
     can: async (orgId, capability) => {
       const o = await service.get(orgId).catch(() => null);
       return !!o && o.status === 'active' && o.capabilities.includes(capability);
     },
     countTrip: (orgId) => service.countTrip(orgId),
+    setRating: (orgId, avg, count) => service.setRating(orgId, avg, count),
     requireOrgRole,
     registerRoutes: (app, requireAdmin) => registerOrganizationsRoutes(app, { service, audit: deps.audit, requireAdmin, requireOrgRole }),
   };

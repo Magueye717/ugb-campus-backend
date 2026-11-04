@@ -1,18 +1,20 @@
 import type { TypeBoxTypeProvider } from '@fastify/type-provider-typebox';
 import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fastify';
+import type { ObjectId } from 'mongodb';
 import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
 import { errors } from '../../platform/http/errors.js';
-import { IdParams, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
+import { IdParams, Nullable, ObjectIdString, PhoneInput, toObjectId } from '../../platform/http/schemas.js';
 import { CAMPUSES } from '../accounts/index.js';
 import type { AuditApi } from '../audit/index.js';
 import type { OrganizationsApi, OrgRole } from '../organizations/index.js';
-import { PAYMENT_METHODS, PaymentView, paymentView } from '../payments/index.js';
-import type { CommerceService } from './commerce.service.js';
-import { BUSINESS_KINDS, ITEM_SECTIONS, ORDER_MODES, type BusinessDoc } from './commerce.types.js';
+import { PaymentView, paymentView } from '../payments/index.js';
+import type { BusinessRef, CommerceService } from './commerce.service.js';
+import { BUSINESS_KINDS, DELIVERY_ZONE_LABELS, DELIVERY_ZONES, ITEM_SECTIONS, MAX_SPECIALTIES, ORDER_MODES, ORDER_PAYMENT_LABELS, ORDER_PAYMENT_METHODS, SPECIALTIES, type BusinessDoc, type BusinessKind } from './commerce.types.js';
 
-const Nullable = <T extends Parameters<typeof Type.Union>[0][number]>(t: T) => Type.Union([t, Type.Null()]);
+// Null first: the validator would otherwise coerce null to 0 ("free delivery") through the integer branch.
+const Fee = Nullable(Type.Integer({ minimum: 0, maximum: 5000 }));
 const Hhmm = Type.String({ pattern: '^\\d{2}:\\d{2}$' });
 const ServiceSchema = Type.Object({ start: Hhmm, end: Hhmm }, { additionalProperties: false });
 const Location = Type.Object({ lat: Type.Number({ minimum: -90, maximum: 90 }), lng: Type.Number({ minimum: -180, maximum: 180 }) }, { additionalProperties: false });
@@ -29,13 +31,15 @@ const ItemView = Type.Object({
   stock: Nullable(Type.Number({ description: 'Shops: units left; null: not counted.' })),
   soldOut: Type.Boolean(),
   available: Type.Boolean(),
+  orderable: Type.Boolean({ description: 'False: for information only (a service done on the spot), never in an order.' }),
 });
 const BusinessView = Type.Object({
   id: Type.String(),
   orgId: Type.String(),
   kind: Type.String({ description: BUSINESS_KINDS.join(' | ') }),
   name: Type.String(),
-  specialty: Type.String(),
+  specialties: Type.Array(Type.String()),
+  specialty: Type.String({ description: 'The specialties joined: "Sénégalais · Grillades".' }),
   description: Type.String(),
   photo: Nullable(Type.String()),
   location: Nullable(Type.Object({ lat: Type.Number(), lng: Type.Number() })),
@@ -47,9 +51,14 @@ const BusinessView = Type.Object({
   hours: Type.String({ description: '"12h-15h · 19h-22h"' }),
   open: Type.Boolean({ description: 'Takes orders now (within its hours and not paused).' }),
   statusLabel: Type.String({ description: '"Ouvert · jusqu’à 15h", "Fermé · ouvre à 19h", "Commandes en pause"' }),
-  deliveryFee: Nullable(Type.Number({ description: 'FCFA, 0: free; null: pickup only.' })),
+  deliveryFees: Type.Object({ campus1: Nullable(Type.Number()), campus2: Nullable(Type.Number()), outside: Nullable(Type.Number()) }, { description: 'FCFA per zone, 0: free; null: no delivery there.' }),
+  deliveryFee: Nullable(Type.Number({ description: 'The lowest delivery price; null: pickup only.' })),
   acceptingOrders: Type.Boolean(),
+  rating: Nullable(Type.Number({ description: 'Average stars of its orders (1 decimal); null: not rated yet.' })),
+  ratingCount: Type.Number(),
+  paymentMethods: Type.Array(Type.Object({ value: Type.String(), label: Type.String() }), { description: 'How students may pay: cash (at delivery or the counter), wave, orange_money.' }),
   active: Type.Boolean(),
+  byStudent: Type.Boolean({ description: 'A student’s own shop.' }),
 });
 const ListedBusiness = Type.Object({ ...BusinessView.properties, highlights: Type.Array(ItemView), minPrice: Nullable(Type.Number()), itemsCount: Type.Number(), itemNames: Type.Array(Type.String(), { description: 'Every available item: for searching.' }) });
 const BusinessDetail = Type.Object({ ...BusinessView.properties, items: Type.Array(ItemView) });
@@ -61,12 +70,16 @@ const OrderView = Type.Object({
   lines: Type.Array(Type.Object({ itemId: Type.String(), name: Type.String(), price: Type.Number(), qty: Type.Number(), photo: Type.Union([Type.String(), Type.Null()]) })),
   subtotal: Type.Number(),
   deliveryFee: Type.Number(),
+  zone: Nullable(Type.String({ description: DELIVERY_ZONES.join(' | ') })),
+  zoneLabel: Nullable(Type.String()),
   total: Type.Number(),
   mode: Type.String({ description: ORDER_MODES.join(' | ') }),
   address: Nullable(Type.String()),
   note: Nullable(Type.String()),
   refusal: Nullable(Type.String()),
   refunded: Type.Boolean(),
+  method: Type.String({ description: 'cash | wave | orange_money' }),
+  methodLabel: Type.String(),
   history: Type.Array(Type.Object({ status: Type.String(), at: Type.String() })),
   createdAt: Type.String(),
   payment: Nullable(Type.Object({ reference: Type.String(), checkoutUrl: Nullable(Type.String()) }, { description: 'Being paid: reopen the checkout.' })),
@@ -75,7 +88,7 @@ const OrderView = Type.Object({
 const ProfileBody = Type.Object(
   {
     name: Type.Optional(Type.String({ minLength: 2, maxLength: 60 })),
-    specialty: Type.Optional(Type.String({ maxLength: 40 })),
+    specialties: Type.Optional(Type.Array(Type.String({ maxLength: 40 }), { minItems: 1, maxItems: MAX_SPECIALTIES, description: 'From GET /reference/commerce, 1 to 4.' })),
     description: Type.Optional(Type.String({ maxLength: 500 })),
     photoId: Type.Optional(Nullable(ObjectIdString)),
     location: Type.Optional(Nullable(Location)),
@@ -83,8 +96,9 @@ const ProfileBody = Type.Object(
     campus: Type.Optional(Nullable(Type.Enum(CAMPUSES))),
     phone: Type.Optional(Type.String({ maxLength: 20 })),
     services: Type.Optional(Type.Array(ServiceSchema, { minItems: 1, maxItems: 4 })),
-    deliveryFee: Type.Optional(Nullable(Type.Integer({ minimum: 0, maximum: 5000 }))),
+    deliveryFees: Type.Optional(Type.Object({ campus1: Fee, campus2: Fee, outside: Fee }, { additionalProperties: false })),
     acceptingOrders: Type.Optional(Type.Boolean()),
+    paymentMethods: Type.Optional(Type.Array(Type.Enum(ORDER_PAYMENT_METHODS), { minItems: 1, maxItems: ORDER_PAYMENT_METHODS.length })),
   },
   { additionalProperties: false },
 );
@@ -97,30 +111,42 @@ const ItemFields = {
   photoId: Type.Optional(Nullable(ObjectIdString)),
   stock: Type.Optional(Nullable(Type.Integer({ minimum: 0, maximum: 100_000 }))),
   available: Type.Optional(Type.Boolean()),
+  orderable: Type.Optional(Type.Boolean({ description: 'Default true. False: shown for information only (printing, on the spot), no stock, never in an order.' })),
   sortOrder: Type.Optional(Type.Number()),
 };
-const OrgParams = Type.Object({ orgId: ObjectIdString }, { additionalProperties: false });
-const OrgItemParams = Type.Object({ orgId: ObjectIdString, itemId: ObjectIdString }, { additionalProperties: false });
-const OrgOrderParams = Type.Object({ orgId: ObjectIdString, id: ObjectIdString }, { additionalProperties: false });
+// A business's own routes name its space: /org/:orgId/restaurant/… or /org/:orgId/shop/… (one entity may run both).
+const OrgParams = Type.Object({ orgId: ObjectIdString, space: Type.Enum(BUSINESS_KINDS) }, { additionalProperties: false });
+const OrgItemParams = Type.Object({ orgId: ObjectIdString, space: Type.Enum(BUSINESS_KINDS), itemId: ObjectIdString }, { additionalProperties: false });
+const OrgOrderParams = Type.Object({ orgId: ObjectIdString, space: Type.Enum(BUSINESS_KINDS), id: ObjectIdString }, { additionalProperties: false });
+const refOf = (p: { orgId: string; space: BusinessKind }): BusinessRef => ({ orgId: toObjectId(p.orgId), kind: p.space });
 
 type Deps = {
   service: CommerceService;
   audit: AuditApi;
-  requireOrgRole: (roles: OrgRole[]) => preHandlerHookHandler;
+  requireOrgRole: (roles: OrgRole[], space?: 'param') => preHandlerHookHandler;
   roleIn: OrganizationsApi['roleIn'];
   requireAdmin: preHandlerHookHandler;
+  /** Restaurant editors add restaurants, shop editors shops (admins both). */
+  editsKind: (userId: ObjectId, kind: BusinessKind) => Promise<boolean>;
 };
 const baseUrlOf = (req: FastifyRequest) => `${req.protocol}://${req.host}`;
 
-export function registerCommerceRoutes(root: FastifyInstance, { service, audit, requireOrgRole, roleIn, requireAdmin }: Deps) {
+export function registerCommerceRoutes(root: FastifyInstance, { service, audit, requireOrgRole, roleIn, requireAdmin, editsKind }: Deps) {
   const app = root.withTypeProvider<TypeBoxTypeProvider>();
   const me = (req: FastifyRequest) => toObjectId(actorOf(req).userId);
   const tags = ['commerce'];
-  const managers = { preHandler: [requireAuth, requireOrgRole(['owner', 'manager'])] };
-  const team = { preHandler: [requireAuth, requireOrgRole(['owner', 'manager', 'staff'])] };
+  const managers = { preHandler: [requireAuth, requireOrgRole(['owner', 'manager'], 'param')] };
+  const team = { preHandler: [requireAuth, requireOrgRole(['owner', 'manager', 'staff'], 'param')] };
   const trace = (req: FastifyRequest, action: string, type: string, id: string, metadata?: Record<string, unknown>) =>
     audit.record({ actor: { type: 'user', id: actorOf(req).userId }, action, target: { type, id }, requestId: req.id, ...(metadata ? { metadata } : {}) });
   const view = (b: BusinessDoc) => service.publicView(b);
+
+  // The lists the app's pickers show (specialties, delivery zones): one source, here.
+  app.get(
+    '/reference/commerce',
+    { schema: { tags, response: { 200: Type.Object({ specialties: Type.Object({ restaurant: Type.Array(Type.String()), shop: Type.Array(Type.String()) }), maxSpecialties: Type.Integer(), paymentMethods: Type.Array(Type.Object({ value: Type.String(), label: Type.String() })), zones: Type.Array(Type.Object({ value: Type.String(), label: Type.String() })) }) } } },
+    async () => ({ specialties: { restaurant: [...SPECIALTIES.restaurant], shop: [...SPECIALTIES.shop] }, maxSpecialties: MAX_SPECIALTIES, paymentMethods: ORDER_PAYMENT_METHODS.map((m) => ({ value: m, label: ORDER_PAYMENT_LABELS[m] })), zones: DELIVERY_ZONES.map((z) => ({ value: z, label: DELIVERY_ZONE_LABELS[z] })) }),
+  );
 
   // ---- Students -------------------------------------------------------------------------------------------------
 
@@ -153,24 +179,46 @@ export function registerCommerceRoutes(root: FastifyInstance, { service, audit, 
       schema: {
         tags,
         params: IdParams,
-        description: 'One order, paid now (Wave / Orange Money). The business is notified once paid.',
+        description: 'One order. Wave / Orange Money: paid now, the business is notified once paid. Cash (if the business accepts it): sent to the business at once, paid at delivery or at the counter (no payment).',
         body: Type.Object(
           {
             lines: Type.Array(Type.Object({ itemId: ObjectIdString, qty: Type.Integer({ minimum: 0, maximum: 20 }) }, { additionalProperties: false }), { minItems: 1, maxItems: 30 }),
             mode: Type.Enum(ORDER_MODES),
+            zone: Type.Optional(Nullable(Type.Enum(DELIVERY_ZONES))),
             address: Type.Optional(Nullable(Type.String({ maxLength: 120 }))),
             note: Type.Optional(Nullable(Type.String({ maxLength: 200 }))),
-            method: Type.Enum(PAYMENT_METHODS),
+            method: Type.Enum(ORDER_PAYMENT_METHODS),
             returnUrl: Type.Optional(Type.String({ maxLength: 300 })),
           },
           { additionalProperties: false },
         ),
-        response: { 201: Type.Object({ order: OrderView, payment: PaymentView }) },
+        response: { 201: Type.Object({ order: OrderView, payment: Nullable(PaymentView) }) },
       },
     },
     async (req, reply) => {
       const { order, payment } = await service.place(me(req), toObjectId(req.params.id), req.body, baseUrlOf(req));
-      return reply.status(201).send({ order: await service.mineOne(me(req), order._id), payment: paymentView(payment) });
+      return reply.status(201).send({ order: await service.mineOne(me(req), order._id), payment: payment ? paymentView(payment) : null });
+    },
+  );
+
+  app.post(
+    '/me/shop',
+    {
+      preHandler: requireAuth,
+      schema: {
+        tags,
+        description: 'A student opens their own shop (products or services): they get its space (catalog, orders, team); its articles show in the market.',
+        body: Type.Object(
+          { name: Type.String({ minLength: 2, maxLength: 60 }), specialties: Type.Array(Type.String({ maxLength: 40 }), { minItems: 1, maxItems: MAX_SPECIALTIES, description: 'From GET /reference/commerce, 1 to 4.' }), description: Type.Optional(Type.String({ maxLength: 500 })), photoId: Type.Optional(Nullable(ObjectIdString)) },
+          { additionalProperties: false },
+        ),
+        response: { 201: BusinessView },
+      },
+    },
+    async (req, reply) => {
+      const b = await service.openStudentShop(me(req), req.body);
+      await trace(req, 'business.student_open', 'business', b._id.toHexString());
+      return reply.status(201).send(view(b));
     },
   );
 
@@ -183,48 +231,50 @@ export function registerCommerceRoutes(root: FastifyInstance, { service, audit, 
 
   // ---- The business's own space (members: /org/:orgId/members, owner) ----------------------------------------------
 
-  app.get('/org/:orgId/business', { ...team, schema: { tags, params: OrgParams, response: { 200: BusinessView } } }, async (req) => view(await service.ofOrg(toObjectId(req.params.orgId))));
+  app.get('/org/:orgId/:space/business', { ...team, schema: { tags, params: OrgParams, response: { 200: BusinessView } } }, async (req) => view(await service.ofOrg(refOf(req.params))));
 
-  app.patch('/org/:orgId/business', { ...managers, schema: { tags, params: OrgParams, description: 'Picture, GPS point, address, hours, delivery, pause orders…', body: ProfileBody, response: { 200: BusinessView } } }, async (req) => {
-    const b = await service.update(toObjectId(req.params.orgId), me(req), req.body);
+  // Pausing orders is the managers' call too; the rest of the profile is the owner's only.
+  app.patch('/org/:orgId/:space/business', { ...managers, schema: { tags, params: OrgParams, description: 'Picture, GPS point, address, hours, delivery prices: the owner. Pause orders: owner or managers.', body: ProfileBody, response: { 200: BusinessView } } }, async (req) => {
+    const onlyPause = Object.keys(req.body).every((k) => k === 'acceptingOrders');
+    if (!onlyPause && !(await roleIn(toObjectId(req.params.orgId), me(req), ['owner'], req.params.space))?.includes('owner')) throw errors.forbidden('Seul le propriétaire modifie les informations du commerce.');
+    const b = await service.update(refOf(req.params), me(req), req.body);
     await trace(req, 'business.update', 'business', b._id.toHexString(), { fields: Object.keys(req.body) });
     return view(b);
   });
 
-  app.get('/org/:orgId/catalog', { ...team, schema: { tags, params: OrgParams, response: { 200: Type.Object({ items: Type.Array(ItemView) }) } } }, async (req) => {
-    const b = await service.ofOrg(toObjectId(req.params.orgId));
+  app.get('/org/:orgId/:space/catalog', { ...team, schema: { tags, params: OrgParams, response: { 200: Type.Object({ items: Type.Array(ItemView) }) } } }, async (req) => {
+    const b = await service.ofOrg(refOf(req.params));
     return { items: (await service.catalog(b._id)).map((i) => service.itemView(i)) };
   });
 
-  app.post('/org/:orgId/catalog', { ...managers, schema: { tags, params: OrgParams, description: 'Restaurants: menu or drink. Shops: article (with stock).', body: Type.Object(ItemFields, { additionalProperties: false }), response: { 201: ItemView } } }, async (req, reply) => {
-    const item = await service.addItem(toObjectId(req.params.orgId), me(req), req.body);
+  app.post('/org/:orgId/:space/catalog', { ...managers, schema: { tags, params: OrgParams, description: 'Restaurants: menu or drink. Shops: article (with stock).', body: Type.Object(ItemFields, { additionalProperties: false }), response: { 201: ItemView } } }, async (req, reply) => {
+    const item = await service.addItem(refOf(req.params), me(req), req.body);
     return reply.status(201).send(service.itemView(item));
   });
 
   app.patch(
-    '/org/:orgId/catalog/:itemId',
+    '/org/:orgId/:space/catalog/:itemId',
     { ...team, schema: { tags, params: OrgItemParams, description: 'Staff may only switch availability (sold out today).', body: Type.Partial(Type.Object(ItemFields, { additionalProperties: false })), response: { 200: ItemView } } },
     async (req) => {
-      const orgId = toObjectId(req.params.orgId);
       const onlyAvailability = Object.keys(req.body).every((k) => k === 'available');
-      if (!onlyAvailability && !(await roleIn(orgId, me(req), ['owner', 'manager']))) throw errors.forbidden('Seuls le propriétaire et les gérants modifient le catalogue.');
-      return service.itemView(await service.updateItem(orgId, me(req), toObjectId(req.params.itemId), req.body));
+      if (!onlyAvailability && !(await roleIn(toObjectId(req.params.orgId), me(req), ['owner', 'manager'], req.params.space))) throw errors.forbidden('Seuls le propriétaire et les gérants modifient le catalogue.');
+      return service.itemView(await service.updateItem(refOf(req.params), me(req), toObjectId(req.params.itemId), req.body));
     },
   );
 
-  app.delete('/org/:orgId/catalog/:itemId', { ...managers, schema: { tags, params: OrgItemParams } }, async (req, reply) => {
-    await service.removeItem(toObjectId(req.params.orgId), toObjectId(req.params.itemId));
+  app.delete('/org/:orgId/:space/catalog/:itemId', { ...managers, schema: { tags, params: OrgItemParams } }, async (req, reply) => {
+    await service.removeItem(refOf(req.params), toObjectId(req.params.itemId));
     return reply.status(204).send();
   });
 
   app.get(
-    '/org/:orgId/orders',
+    '/org/:orgId/:space/orders',
     { ...team, schema: { tags, params: OrgParams, querystring: Type.Object({ scope: Type.Optional(Type.Enum(['active', 'done'] as const)) }, { additionalProperties: false }), response: { 200: Type.Object({ items: Type.Array(OrderView) }) } } },
-    async (req) => ({ items: await service.queue(toObjectId(req.params.orgId), req.query.scope ?? 'active') }),
+    async (req) => ({ items: await service.queue(refOf(req.params), req.query.scope ?? 'active') }),
   );
 
   app.post(
-    '/org/:orgId/orders/handover',
+    '/org/:orgId/:space/orders/handover',
     {
       ...team,
       schema: {
@@ -236,37 +286,67 @@ export function registerCommerceRoutes(root: FastifyInstance, { service, audit, 
       },
     },
     async (req) => {
-      const o = await service.handover(toObjectId(req.params.orgId), req.body.code, me(req));
+      const o = await service.handover(refOf(req.params), req.body.code, me(req));
       await trace(req, 'order.handover', 'order', o._id.toHexString());
-      return service.businessOrder(o.orgId, o._id);
+      return service.businessOrder(refOf(req.params), o._id);
     },
   );
 
-  app.get('/org/:orgId/orders/:id', { ...team, schema: { tags, params: OrgOrderParams, response: { 200: OrderView } } }, async (req) => service.businessOrder(toObjectId(req.params.orgId), toObjectId(req.params.id)));
+  app.get('/org/:orgId/:space/orders/:id', { ...team, schema: { tags, params: OrgOrderParams, response: { 200: OrderView } } }, async (req) => service.businessOrder(refOf(req.params), toObjectId(req.params.id)));
 
   for (const [path, to] of [['accept', 'accepted'], ['ready', 'ready'], ['complete', 'completed']] as const) {
-    app.post(`/org/:orgId/orders/:id/${path}`, { ...team, schema: { tags, params: OrgOrderParams, response: { 200: OrderView } } }, async (req) => {
-      const { orgId, id } = req.params as { orgId: string; id: string };
-      await service.advance(toObjectId(orgId), toObjectId(id), me(req), to);
-      await trace(req, `order.${path}`, 'order', id);
-      return service.businessOrder(toObjectId(orgId), toObjectId(id));
+    app.post(`/org/:orgId/:space/orders/:id/${path}`, { ...team, schema: { tags, params: OrgOrderParams, response: { 200: OrderView } } }, async (req) => {
+      const params = req.params as { orgId: string; space: BusinessKind; id: string };
+      await service.advance(refOf(params), toObjectId(params.id), me(req), to);
+      await trace(req, `order.${path}`, 'order', params.id);
+      return service.businessOrder(refOf(params), toObjectId(params.id));
     });
   }
 
   app.post(
-    '/org/:orgId/orders/:id/refuse',
+    '/org/:orgId/:space/orders/:id/refuse',
     { ...team, schema: { tags, params: OrgOrderParams, description: 'A placed order only: the student is refunded and told why.', body: Type.Object({ reason: Type.String({ minLength: 3, maxLength: 200 }) }, { additionalProperties: false }), response: { 200: OrderView } } },
     async (req) => {
-      await service.refuse(toObjectId(req.params.orgId), toObjectId(req.params.id), me(req), req.body.reason);
+      await service.refuse(refOf(req.params), toObjectId(req.params.id), me(req), req.body.reason);
       await trace(req, 'order.refuse', 'order', req.params.id, { reason: req.body.reason });
-      return service.businessOrder(toObjectId(req.params.orgId), toObjectId(req.params.id));
+      return service.businessOrder(refOf(req.params), toObjectId(req.params.id));
     },
   );
 
   // ---- Admins -----------------------------------------------------------------------------------------------------
 
   const admin = { preHandler: [requireAuth, requireAdmin] };
-  app.get('/admin/businesses', { ...admin, schema: { tags: ['admin'], response: { 200: Type.Object({ items: Type.Array(BusinessView) }) } } }, async () => ({ items: (await service.listAll()).map(view) }));
+  const mayEdit = async (req: FastifyRequest, kind: BusinessKind) => {
+    if (!(await editsKind(me(req), kind))) throw errors.forbidden(kind === 'restaurant' ? 'Réservé aux responsables des restaurants.' : 'Réservé aux responsables des boutiques.');
+  };
+  app.get('/admin/businesses', { ...admin, schema: { tags: ['admin'], description: 'The kinds the caller edits.', response: { 200: Type.Object({ items: Type.Array(BusinessView) }) } } }, async (req) => {
+    const kinds = (await Promise.all(BUSINESS_KINDS.map(async (k) => ((await editsKind(me(req), k)) ? k : null)))).filter(Boolean);
+    return { items: (await service.listAll()).filter((b) => kinds.includes(b.kind)).map(view) };
+  });
+
+  app.post(
+    '/admin/businesses/owner-lookup',
+    {
+      ...admin,
+      schema: {
+        tags: ['admin'],
+        description: 'Before adding: the account of this number, and the entities it owns (the businesses each runs). Its entity is picked instead of a new one.',
+        body: Type.Object({ phone: PhoneInput }, { additionalProperties: false }),
+        response: {
+          200: Type.Object({
+            account: Nullable(Type.Object({ firstName: Type.String(), lastName: Type.String() })),
+            entities: Type.Array(
+              Type.Object({
+                orgId: Type.String(), name: Type.String(), personal: Type.Boolean(), organizer: Type.Boolean({ description: 'It organizes caravans or events.' }), kinds: Type.Array(Type.String()),
+                businesses: Type.Array(Type.Object({ id: Type.String(), kind: Type.String(), name: Type.String() })),
+              }),
+            ),
+          }),
+        },
+      },
+    },
+    async (req) => service.ownerLookup(req.body.phone),
+  );
 
   app.post(
     '/admin/businesses',
@@ -280,8 +360,11 @@ export function registerCommerceRoutes(root: FastifyInstance, { service, audit, 
             ...ProfileBody.properties,
             kind: Type.Enum(BUSINESS_KINDS),
             name: Type.String({ minLength: 2, maxLength: 60 }),
-            specialty: Type.String({ minLength: 2, maxLength: 40 }),
-            owner: Type.Object({ phone: Type.String({ maxLength: 20 }), firstName: Type.String({ minLength: 2, maxLength: 40 }), lastName: Type.String({ minLength: 2, maxLength: 40 }) }, { additionalProperties: false }),
+            specialties: Type.Array(Type.String({ maxLength: 40 }), { minItems: 1, maxItems: MAX_SPECIALTIES, description: 'From GET /reference/commerce, 1 to 4.' }),
+            orgId: Type.Optional(ObjectIdString),
+            owner: Type.Optional(
+              Type.Object({ phone: Type.String({ maxLength: 20 }), firstName: Type.String({ minLength: 2, maxLength: 40 }), lastName: Type.String({ minLength: 2, maxLength: 40 }), password: Type.Optional(Type.String({ maxLength: 128 })) }, { additionalProperties: false }),
+            ),
           },
           { additionalProperties: false },
         ),
@@ -289,15 +372,76 @@ export function registerCommerceRoutes(root: FastifyInstance, { service, audit, 
       },
     },
     async (req, reply) => {
-      const b = await service.create(req.body);
+      await mayEdit(req, req.body.kind);
+      const { orgId, ...rest } = req.body;
+      const b = await service.create({ ...rest, ...(orgId ? { orgId: toObjectId(orgId) } : {}) }, me(req));
       await trace(req, 'business.create', 'business', b._id.toHexString(), { kind: b.kind });
       return reply.status(201).send(view(b));
     },
   );
 
+  // Référencement: the editors of a kind keep its businesses' profiles and catalogs up to date (with the owner, or
+  // before the owner takes over). Same rules as the owner's routes, by business id.
+  const editable = async (req: FastifyRequest<{ Params: { id: string } }>) => {
+    const b = await service.byId(toObjectId(req.params.id));
+    await mayEdit(req, b.kind);
+    return { b, ref: { orgId: b.orgId, kind: b.kind } satisfies BusinessRef };
+  };
+  const AdminItemParams = Type.Object({ id: ObjectIdString, itemId: ObjectIdString }, { additionalProperties: false });
+
+  app.get('/admin/businesses/:id', { ...admin, schema: { tags: ['admin'], params: IdParams, response: { 200: BusinessView } } }, async (req) => view((await editable(req)).b));
+
   app.patch(
     '/admin/businesses/:id',
-    { ...admin, schema: { tags: ['admin'], params: IdParams, description: 'Hide (or show again) a business.', body: Type.Object({ active: Type.Boolean() }, { additionalProperties: false }), response: { 200: BusinessView } } },
-    async (req) => view(await service.setActive(toObjectId(req.params.id), req.body.active)),
+    {
+      ...admin,
+      schema: {
+        tags: ['admin'],
+        params: IdParams,
+        description: 'The whole profile (name, picture, place, hours, delivery prices), and hide or show it again.',
+        body: Type.Object({ ...ProfileBody.properties, active: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
+        response: { 200: BusinessView },
+      },
+    },
+    async (req) => {
+      const { ref } = await editable(req);
+      const { active, ...profile } = req.body;
+      let b = Object.keys(profile).length ? await service.update(ref, me(req), profile) : await service.ofOrg(ref);
+      if (active !== undefined) b = await service.setActive(b._id, active);
+      await trace(req, 'business.update', 'business', b._id.toHexString(), { fields: Object.keys(req.body), by: 'editor' });
+      return view(b);
+    },
   );
+
+  app.get('/admin/businesses/:id/catalog', { ...admin, schema: { tags: ['admin'], params: IdParams, response: { 200: Type.Object({ items: Type.Array(ItemView) }) } } }, async (req) => {
+    const { b } = await editable(req);
+    return { items: (await service.catalog(b._id)).map((i) => service.itemView(i)) };
+  });
+
+  app.post(
+    '/admin/businesses/:id/catalog',
+    { ...admin, schema: { tags: ['admin'], params: IdParams, description: 'Restaurants: menu or drink. Shops: article (with stock).', body: Type.Object(ItemFields, { additionalProperties: false }), response: { 201: ItemView } } },
+    async (req, reply) => {
+      const { ref } = await editable(req);
+      const item = await service.addItem(ref, me(req), req.body);
+      await trace(req, 'catalog.add', 'catalog_item', item._id.toHexString(), { by: 'editor' });
+      return reply.status(201).send(service.itemView(item));
+    },
+  );
+
+  app.patch(
+    '/admin/businesses/:id/catalog/:itemId',
+    { ...admin, schema: { tags: ['admin'], params: AdminItemParams, body: Type.Partial(Type.Object(ItemFields, { additionalProperties: false })), response: { 200: ItemView } } },
+    async (req) => {
+      const { ref } = await editable(req);
+      return service.itemView(await service.updateItem(ref, me(req), toObjectId(req.params.itemId), req.body));
+    },
+  );
+
+  app.delete('/admin/businesses/:id/catalog/:itemId', { ...admin, schema: { tags: ['admin'], params: AdminItemParams } }, async (req, reply) => {
+    const { ref } = await editable(req);
+    await service.removeItem(ref, toObjectId(req.params.itemId));
+    await trace(req, 'catalog.remove', 'catalog_item', req.params.itemId, { by: 'editor' });
+    return reply.status(204).send();
+  });
 }

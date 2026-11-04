@@ -76,3 +76,6 @@ export const CAMPUS_OUTLINE: { lat: number; lng: number }[] = [
 
 /** The box around it: the map stays inside. */
 export const CAMPUS_BOUNDS = { south: 16.055379, west: -16.429123, north: 16.071357, east: -16.417222 };
+
+/** Where the map opens: centred on the Tour de l’Œuf, close enough on the satellite view to read the buildings' names (G1, G2…). */
+export const CAMPUS_START = { lat: 16.06556, lng: -16.42283, delta: 0.0032 };

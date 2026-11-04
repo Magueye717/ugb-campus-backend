@@ -37,22 +37,25 @@ describe('admin back office', () => {
   });
 });
 
+const types = (me: { spaces: { type: string }[] }) => me.spaces.map((x) => x.type);
+
 describe('spaces and organizer roles', () => {
   it('a student who is made organizer gets both spaces in /me', async () => {
     const s = await registerStudent(t);
     const orgId = await createOrg();
-    expect(json(await call('GET', '/me', s.tokens.accessToken)).spaces).toEqual(['student']);
+    expect(types(json(await call('GET', '/me', s.tokens.accessToken)))).toEqual(['student']);
     expect((await call('PUT', `/admin/organizations/${orgId}/members`, admin.tokens.accessToken, { phone: s.phone, roles: ['owner'] })).statusCode).toBe(204);
     const me = json(await call('GET', '/me', s.tokens.accessToken));
-    expect(me.spaces).toEqual(['student', 'organizer']);
+    expect(types(me)).toEqual(['student', 'organizer']);
+    expect(me.spaces[1]).toMatchObject({ key: `organizer:${orgId}`, orgId, roles: ['owner'] });
     expect(me.organizations[0]).toMatchObject({ id: orgId, roles: ['owner'] });
   });
 
   it('an organizer-only account has no student space and cannot use student routes', async () => {
     const staff = await createStaff(t);
     const orgId = await createOrg();
-    await call('PUT', `/admin/organizations/${orgId}/members`, admin.tokens.accessToken, { phone: staff.phone, roles: ['scanner'] });
-    expect(json(await call('GET', '/me', staff.tokens.accessToken)).spaces).toEqual(['organizer']);
+    await call('PUT', `/admin/organizations/${orgId}/members`, admin.tokens.accessToken, { phone: staff.phone, roles: ['scanner'], space: 'organizer' });
+    expect(types(json(await call('GET', '/me', staff.tokens.accessToken)))).toEqual(['organizer']);
     expect((await call('PATCH', '/me/student-profile', staff.tokens.accessToken, { onCampus: false })).statusCode).toBe(403);
   });
 
@@ -63,7 +66,7 @@ describe('spaces and organizer roles', () => {
     await call('PUT', `/admin/organizations/${mine}/members`, admin.tokens.accessToken, { phone: owner.phone, roles: ['owner'] });
     expect((await call('GET', `/org/${mine}`, owner.tokens.accessToken)).statusCode).toBe(200);
     expect((await call('GET', `/org/${theirs}`, owner.tokens.accessToken)).statusCode).toBe(404);
-    expect((await call('GET', `/org/${theirs}/members`, owner.tokens.accessToken)).statusCode).toBe(404);
+    expect((await call('GET', `/org/${theirs}/organizer/members`, owner.tokens.accessToken)).statusCode).toBe(404);
   });
 
   it('owners manage their team but cannot appoint owners; scanners cannot manage the team', async () => {
@@ -72,16 +75,17 @@ describe('spaces and organizer roles', () => {
     const orgId = await createOrg();
     await call('PUT', `/admin/organizations/${orgId}/members`, admin.tokens.accessToken, { phone: owner.phone, roles: ['owner'] });
 
-    expect((await call('PUT', `/org/${orgId}/members`, owner.tokens.accessToken, { phone: scanner.phone, roles: ['owner'] })).statusCode).toBe(403);
-    expect((await call('PUT', `/org/${orgId}/members`, owner.tokens.accessToken, { phone: scanner.phone, roles: ['scanner'] })).statusCode).toBe(204);
+    expect((await call('PUT', `/org/${orgId}/organizer/members`, owner.tokens.accessToken, { phone: scanner.phone, roles: ['owner'] })).statusCode).toBe(403);
+    expect((await call('PUT', `/org/${orgId}/organizer/members`, owner.tokens.accessToken, { phone: scanner.phone, roles: ['scanner'] })).statusCode).toBe(204);
     expect((await call('GET', `/org/${orgId}`, scanner.tokens.accessToken)).statusCode).toBe(200);
-    expect((await call('GET', `/org/${orgId}/members`, scanner.tokens.accessToken)).statusCode).toBe(404);
+    expect((await call('GET', `/org/${orgId}/organizer/members`, scanner.tokens.accessToken)).statusCode).toBe(404);
 
-    const members = json(await call('GET', `/org/${orgId}/members`, owner.tokens.accessToken));
-    expect(members).toHaveLength(2);
-    expect(members[0]).not.toHaveProperty('phone');
+    const members = json(await call('GET', `/org/${orgId}/organizer/members`, owner.tokens.accessToken));
+    expect(members.items).toHaveLength(2);
+    expect(members.items[0]).not.toHaveProperty('phone');
+    expect(members.roles).toEqual([{ value: 'manager', label: 'Gérant' }, { value: 'scanner', label: 'Contrôleur' }]);
 
-    await call('DELETE', `/org/${orgId}/members/${scanner.userId}`, owner.tokens.accessToken);
+    await call('DELETE', `/org/${orgId}/organizer/members/${scanner.userId}`, owner.tokens.accessToken);
     expect((await call('GET', `/org/${orgId}`, scanner.tokens.accessToken)).statusCode).toBe(404);
   });
 
@@ -91,7 +95,7 @@ describe('spaces and organizer roles', () => {
     await call('PUT', `/admin/organizations/${orgId}/members`, admin.tokens.accessToken, { phone: owner.phone, roles: ['owner'] });
     await call('PATCH', `/admin/organizations/${orgId}`, admin.tokens.accessToken, { status: 'suspended' });
     expect((await call('GET', `/org/${orgId}`, owner.tokens.accessToken)).statusCode).toBe(404);
-    expect(json(await call('GET', '/me', owner.tokens.accessToken)).spaces).toEqual(['student']);
+    expect(types(json(await call('GET', '/me', owner.tokens.accessToken)))).toEqual(['student']);
   });
 
   it('stores the category, the contact e-mail and an empty logo; the owner can update the e-mail', async () => {
@@ -127,7 +131,7 @@ describe('spaces and organizer roles', () => {
   it('audits membership changes', async () => {
     const s = await registerStudent(t);
     const orgId = await createOrg();
-    await call('PUT', `/admin/organizations/${orgId}/members`, admin.tokens.accessToken, { phone: s.phone, roles: ['manager'] });
+    await call('PUT', `/admin/organizations/${orgId}/members`, admin.tokens.accessToken, { phone: s.phone, roles: ['manager'], space: 'organizer' });
     const entry = await t.c.mongo.db.collection('auditLogs').findOne({ action: 'membership.set', 'target.id': orgId });
     expect(entry?.actor).toMatchObject({ type: 'user', id: admin.userId.toHexString() });
   });

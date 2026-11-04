@@ -2,17 +2,33 @@ import type { ObjectId } from 'mongodb';
 
 import type { ImageRef } from '../../platform/media.js';
 
-export const PLATFORM_ROLES = ['admin', 'content_editor', 'resto_u_staff', 'lost_office', 'academic_editor', 'finance'] as const;
+/**
+ * The app creator's team. Only `admin` (the super admin) gives these roles. content_editor: alerts, "À la une",
+ * paid banners · resto_u_staff: the public restaurants' menus (only the restaurants assigned to them) ·
+ * place_editor / restaurant_editor / shop_editor: add and update the campus places, private restaurants, shops.
+ */
+export const PLATFORM_ROLES = ['admin', 'content_editor', 'resto_u_staff', 'lost_office', 'academic_editor', 'finance', 'place_editor', 'restaurant_editor', 'shop_editor'] as const;
 export type PlatformRole = (typeof PLATFORM_ROLES)[number];
+/** How the team list and the notifications name each role. */
+export const PLATFORM_ROLE_LABELS: Record<PlatformRole, string> = {
+  admin: 'Super administrateur', content_editor: 'Communication (alertes, bannières)', resto_u_staff: 'Restaurant universitaire', lost_office: 'Bureau des objets trouvés',
+  academic_editor: 'Scolarité', finance: 'Finances', place_editor: 'Lieux', restaurant_editor: 'Restaurants privés', shop_editor: 'Boutiques',
+};
 /**
  * The app's work spaces opened by platform roles (admins open them all). A student keeps the student space as
  * home and reaches these from "Mes espaces"; so does anyone holding several roles.
  */
 export const ROLE_SPACES = [
-  { space: 'resto', roles: ['resto_u_staff'] },
-  { space: 'alerts', roles: ['content_editor', 'academic_editor'] },
-] as const satisfies readonly { space: string; roles: readonly PlatformRole[] }[];
-export type AppSpace = 'student' | 'organizer' | 'business' | (typeof ROLE_SPACES)[number]['space'];
+  { space: 'admin', label: 'Administration', roles: ['admin'] },
+  { space: 'resto', label: 'Restaurant universitaire', roles: ['resto_u_staff'] },
+  { space: 'alerts', label: 'Communication', roles: ['content_editor', 'academic_editor'] },
+  { space: 'directory', label: 'Référencement', roles: ['place_editor', 'restaurant_editor', 'shop_editor'] },
+] as const satisfies readonly { space: string; label: string; roles: readonly PlatformRole[] }[];
+export type RoleSpace = (typeof ROLE_SPACES)[number]['space'];
+/** The kind of a space; an organization's spaces also carry the organization (one entity may run several). */
+export type AppSpaceType = 'student' | 'organizer' | 'business' | RoleSpace;
+/** `personal`: a student's own entity (their shop, their events). */
+export type AppSpace = { key: string; type: AppSpaceType; kind: 'restaurant' | 'shop' | null; orgId: string | null; name: string; roles: string[]; logoUrl: string | null; personal: boolean };
 
 export const CAMPUSES = ['campus1', 'campus2'] as const;
 export type Campus = (typeof CAMPUSES)[number];
@@ -74,6 +90,8 @@ export type UserDoc = {
   lastName: string;
   status: 'active' | 'suspended' | 'deleted';
   platformRoles: PlatformRole[];
+  /** resto_u_staff: the public restaurants this person publishes menus for (assigned by the super admin). */
+  restoIds?: ObjectId[];
   login: { failedCount: number; lockedUntil: Date | null; lastLoginAt: Date | null };
   terms: { version: string; acceptedAt: Date } | null;
   notificationPrefs: NotificationPrefs;
@@ -112,6 +130,8 @@ export type StudentProfileDoc = {
    * own student card (`source: 'card'`). Missing on older profiles.
    */
   identity?: { birthDate: string | null; birthPlace: string | null; nationality: string | null; source: 'card' | 'manual'; updatedAt: Date } | null;
+  /** When the student's own card was last read and matched their student number: saving the identity needs a recent one. */
+  cardReadAt?: Date | null;
   academicGroupIds: ObjectId[];
   verification: { status: 'unverified' | 'verified'; verifiedAt: Date | null };
   createdAt: Date;
@@ -134,7 +154,8 @@ export type NewStudentAccount = {
 };
 
 /** What /me needs from the organizations module (wired in the container: no import of that module here). */
-export type MembershipSummary = { orgId: string; name: string; category: string; level: string; roles: string[]; capabilities: string[] };
+/** One space of an organization the user works in (`space`: organizer, restaurant or shop). */
+export type MembershipSummary = { orgId: string; name: string; category: string; level: string; roles: string[]; capabilities: string[]; space: 'organizer' | 'restaurant' | 'shop'; logoUrl: string | null };
 export interface OrganizationsPort {
   membershipsForUser(userId: ObjectId): Promise<MembershipSummary[]>;
 }

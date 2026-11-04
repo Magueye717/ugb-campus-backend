@@ -1,6 +1,8 @@
 import { bson, type CollectionSpec } from '../../platform/db/schema.js';
-import { PAYMENT_METHODS } from '../payments/index.js';
-import { BUSINESS_KINDS, ITEM_SECTIONS, ORDER_MODES, ORDER_STATUSES } from './commerce.types.js';
+import type { DataMigration } from '../../platform/db/migrations.js';
+import { BUSINESS_KINDS, DELIVERY_ZONES, ITEM_SECTIONS, MAX_SPECIALTIES, ORDER_MODES, ORDER_PAYMENT_METHODS, ORDER_STATUSES } from './commerce.types.js';
+
+const fee = bson.nullable(bson.int({ minimum: 0, maximum: 5000 }));
 
 export const commerceCollections: CollectionSpec[] = [
   {
@@ -11,19 +13,20 @@ export const commerceCollections: CollectionSpec[] = [
           orgId: bson.objectId,
           kind: bson.enumOf(BUSINESS_KINDS),
           name: bson.string({ minLength: 2, maxLength: 60 }),
-          specialty: bson.string({ maxLength: 40 }),
+          specialties: bson.array(bson.string({ maxLength: 40 }), { minItems: 1, maxItems: MAX_SPECIALTIES }),
           description: bson.string({ maxLength: 500 }),
           address: bson.string({ maxLength: 80 }),
           phone: bson.string({ maxLength: 20 }),
-          deliveryFee: bson.nullable(bson.int({ minimum: 0, maximum: 5000 })),
+          deliveryFees: bson.object({ campus1: fee, campus2: fee, outside: fee }, [...DELIVERY_ZONES]),
+          paymentMethods: bson.array(bson.enumOf(ORDER_PAYMENT_METHODS), { minItems: 1, maxItems: ORDER_PAYMENT_METHODS.length }),
           acceptingOrders: bson.bool,
           active: bson.bool,
         },
-        ['orgId', 'kind', 'name', 'specialty', 'description', 'photo', 'location', 'address', 'campus', 'phone', 'services', 'deliveryFee', 'acceptingOrders', 'active', 'createdAt', 'updatedAt'],
+        ['orgId', 'kind', 'name', 'specialties', 'description', 'photo', 'location', 'address', 'campus', 'phone', 'services', 'deliveryFees', 'acceptingOrders', 'active', 'createdAt', 'updatedAt'],
       ),
     },
     indexes: [
-      { key: { orgId: 1 }, options: { name: 'org_unique', unique: true } },
+      { key: { orgId: 1, kind: 1 }, options: { name: 'org_kind_unique', unique: true } },
       { key: { kind: 1, active: 1 }, options: { name: 'listing' } },
     ],
   },
@@ -39,8 +42,9 @@ export const commerceCollections: CollectionSpec[] = [
           price: bson.int({ minimum: 0, maximum: 1_000_000 }),
           stock: bson.nullable(bson.int({ minimum: 0 })),
           available: bson.bool,
+          orderable: bson.bool,
         },
-        ['businessId', 'section', 'category', 'name', 'detail', 'price', 'photo', 'stock', 'available', 'sortOrder', 'archivedAt', 'createdAt', 'updatedAt'],
+        ['businessId', 'section', 'category', 'name', 'detail', 'price', 'photo', 'stock', 'available', 'orderable', 'sortOrder', 'archivedAt', 'createdAt', 'updatedAt'],
       ),
     },
     indexes: [{ key: { businessId: 1, archivedAt: 1, sortOrder: 1 }, options: { name: 'catalog' } }],
@@ -57,7 +61,8 @@ export const commerceCollections: CollectionSpec[] = [
           lines: bson.array(bson.object({ itemId: bson.objectId, qty: bson.int({ minimum: 1, maximum: 20 }) }, ['itemId', 'name', 'price', 'qty']), { minItems: 1, maxItems: 30 }),
           total: bson.int({ minimum: 0 }),
           mode: bson.enumOf(ORDER_MODES),
-          method: bson.enumOf(PAYMENT_METHODS),
+          zone: bson.nullable(bson.enumOf(DELIVERY_ZONES)),
+          method: bson.enumOf(ORDER_PAYMENT_METHODS),
           status: bson.enumOf(ORDER_STATUSES),
         },
         ['code', 'businessId', 'orgId', 'userId', 'lines', 'subtotal', 'deliveryFee', 'total', 'mode', 'address', 'note', 'method', 'paymentId', 'status', 'history', 'refusal', 'payoutId', 'refundPayoutId', 'createdAt', 'updatedAt'],
@@ -69,5 +74,44 @@ export const commerceCollections: CollectionSpec[] = [
       { key: { businessId: 1, status: 1, createdAt: -1 }, options: { name: 'business_queue' } },
       { key: { status: 1, updatedAt: 1 }, options: { name: 'sweep' } },
     ],
+  },
+];
+
+export const commerceMigrations: DataMigration[] = [
+  {
+    id: '2026-11-04-business-per-kind-and-delivery-zones',
+    description: 'One restaurant and one shop per organization (index on orgId + kind); one delivery price becomes a price per zone.',
+    async up(db) {
+      await db.collection('businesses').dropIndex('org_unique').catch(() => undefined);
+      for (const b of await db.collection('businesses').find({ deliveryFees: { $exists: false } }).toArray()) {
+        const f = (b.deliveryFee as number | null | undefined) ?? null;
+        await db.collection('businesses').updateOne({ _id: b._id }, { $set: { deliveryFees: { campus1: f, campus2: f, outside: null } }, $unset: { deliveryFee: '' } });
+      }
+      await db.collection('commerceOrders').updateMany({ zone: { $exists: false } }, { $set: { zone: null } });
+    },
+  },
+  {
+    id: '2026-11-05-catalog-orderable',
+    description: 'An item may be shown for information only (a service done on the spot); existing items stay orderable.',
+    async up(db) {
+      await db.collection('catalogItems').updateMany({ orderable: { $exists: false } }, { $set: { orderable: true } });
+    },
+  },
+  {
+    id: '2026-11-05-business-payment-methods',
+    description: 'Each business chooses how students pay (cash, Wave, Orange Money); existing ones keep online payment only.',
+    async up(db) {
+      await db.collection('businesses').updateMany({ paymentMethods: { $exists: false } }, { $set: { paymentMethods: ['wave', 'orange_money'] } });
+    },
+  },
+  {
+    id: '2026-11-04-business-specialties',
+    description: 'A business may have several specialties (Sénégalais and Grillades): `specialty` becomes the list `specialties`.',
+    async up(db) {
+      for (const b of await db.collection('businesses').find({ specialties: { $exists: false } }).toArray()) {
+        const one = typeof b.specialty === 'string' && b.specialty.trim() ? [b.specialty.trim()] : ['Autre'];
+        await db.collection('businesses').updateOne({ _id: b._id }, { $set: { specialties: one }, $unset: { specialty: '' } });
+      }
+    },
   },
 ];

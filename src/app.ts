@@ -65,11 +65,13 @@ export async function buildApp(c: Container, state = { shuttingDown: false }): P
   await app.register(websocket, { options: { maxPayload: 4096 } });
   registerHealthRoutes(app, { db: c.mongo.db, redis: c.redis, isShuttingDown: () => state.shuttingDown });
 
-  const { accounts, organizations, identity, payments, messaging, taxi, ticketing, caravans, notifications, alerts, publicRestos, media, events, banners, lost, commerce, places } = c.modules;
+  const { accounts, organizations, identity, payments, messaging, taxi, ticketing, caravans, notifications, alerts, publicRestos, media, events, banners, lost, commerce, places, ratings } = c.modules;
   await app.register(
     async (api) => {
       identity.registerRoutes(api);
       accounts.registerRoutes(api);
+      // "Aide & support": the contacts come from the configuration, not the app.
+      api.get('/reference/support', { schema: { tags: ['reference'] } }, async () => ({ phone: c.config.SUPPORT_PHONE, whatsapp: c.config.SUPPORT_PHONE, email: c.config.SUPPORT_EMAIL, hours: 'Lun.-sam. · 8h-20h' }));
       organizations.registerRoutes(api, accounts.requirePlatformRole('admin'));
       payments.registerRoutes(api, accounts.requirePlatformRole('finance'));
       messaging.registerRoutes(api, accounts.requirePlatformRole('admin'));
@@ -78,13 +80,15 @@ export async function buildApp(c: Container, state = { shuttingDown: false }): P
       caravans.registerRoutes(api);
       notifications.registerRoutes(api, accounts.requirePlatformRole('admin'));
       alerts.registerRoutes(api, accounts.requireAnyPlatformRole(['content_editor', 'academic_editor']));
-      publicRestos.registerRoutes(api, accounts.requirePlatformRole('resto_u_staff'));
+      publicRestos.registerRoutes(api, { requireStaff: accounts.requirePlatformRole('resto_u_staff'), requireAdmin: accounts.requirePlatformRole('admin'), restosOf: (u) => accounts.restosOf(u) });
       await media.registerRoutes(api);
       events.registerRoutes(api, accounts.requirePlatformRole('admin'));
       // After media: the card photo is a multipart upload.
       lost.registerRoutes(api, accounts.requirePlatformRole('lost_office'));
-      commerce.registerRoutes(api, accounts.requirePlatformRole('admin'));
-      places.registerRoutes(api, accounts.requireAnyPlatformRole(['content_editor']));
+      // Restaurants and shops are added by the super admin's restaurant and shop editors (admins pass).
+      commerce.registerRoutes(api, accounts.requireAnyPlatformRole(['restaurant_editor', 'shop_editor']));
+      places.registerRoutes(api, accounts.requireAnyPlatformRole(['place_editor']));
+      ratings.registerRoutes(api);
       banners.registerRoutes(api, { requireEditor: accounts.requirePlatformRole('content_editor'), requireAdmin: accounts.requirePlatformRole('admin') });
       registerRealtimeGateway(api, { hub: c.hub, tokens: c.tokens, denylist: c.denylist, clock: c.clock });
     },
