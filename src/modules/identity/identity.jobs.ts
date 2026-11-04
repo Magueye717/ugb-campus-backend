@@ -1,6 +1,6 @@
-import type { Job } from 'bullmq';
+import { UnrecoverableError, type Job } from 'bullmq';
 
-import type { SmsSender } from '../../platform/sms/sms.js';
+import { PermanentSmsError, type SmsSender } from '../../platform/sms/sms.js';
 import { OTP_QUEUE, type OtpJob } from './otp.service.js';
 
 const TEXT: Record<OtpJob['purpose'], (code: string) => string> = {
@@ -9,11 +9,19 @@ const TEXT: Record<OtpJob['purpose'], (code: string) => string> = {
   reset_password: (code) => `UGB Campus : code pour changer ton mot de passe : ${code}. Si tu n’as rien demandé, ignore ce message.`,
 };
 
-/** Worker side of OTP delivery: retried with backoff by BullMQ, one job per (challenge, send). */
+/**
+ * Worker side of OTP delivery: retried with backoff by BullMQ, one job per (challenge, send). A refusal that a retry
+ * can't fix (invalid number, unverified number on a trial account) stops at once.
+ */
 export function otpProcessors(sms: SmsSender) {
   return {
     [OTP_QUEUE]: async (job: Job<OtpJob>) => {
-      await sms.send(job.data.phone, TEXT[job.data.purpose](job.data.code));
+      try {
+        await sms.send(job.data.phone, TEXT[job.data.purpose](job.data.code));
+      } catch (err) {
+        if (err instanceof PermanentSmsError) throw new UnrecoverableError(err.message);
+        throw err;
+      }
     },
   };
 }

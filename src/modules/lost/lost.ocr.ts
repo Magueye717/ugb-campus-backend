@@ -113,11 +113,11 @@ function embossedName(lines: string[]) {
  */
 export function parseCard(text: string): { cardType: CardType | null; studentNumber: string | null; names: string[] } {
   const upper = fold(text);
-  // "P 232 055", "P232O55", "N° : P232055": a P then six digits, spaces and look-alike letters forgiven.
+  // "P 232 055", "P232O55", "N° : P232055": a P then 6 to 11 digits, spaces and look-alike letters forgiven.
   let studentNumber: string | null = null;
-  for (const m of upper.replace(/[ \t.]/g, '').matchAll(/P([0-9OQDILZSGB|]{6})(?![0-9])/g)) {
+  for (const m of upper.replace(/[ \t.]/g, '').matchAll(/P([0-9OQDILZSGB|]{6,11})(?![0-9])/g)) {
     const digits = [...m[1]!].map((c) => AS_DIGIT[c] ?? c).join('');
-    if (/^\d{6}$/.test(digits)) {
+    if (/^\d{6,11}$/.test(digits)) {
       studentNumber = `P${digits}`;
       break;
     }

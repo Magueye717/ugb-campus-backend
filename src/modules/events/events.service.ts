@@ -565,6 +565,8 @@ export class EventsService {
       if (!res.modifiedCount) throw errors.conflict('EVENT_NOT_APPROVED', 'L’événement a changé entre-temps : recharge la page.');
       return created;
     });
+    // Pictures taken off the event leave the storage once the new set is saved.
+    await this.media.release(e.images.filter((old) => !images.some((i) => i.mediaId.equals(old.mediaId))).map((i) => i.mediaId));
     return { event: await this.own(orgId, id), payment: await this.payments.openCheckout(payment, baseUrl) };
   }
 

@@ -4,7 +4,7 @@ import type { Clock } from '../../platform/clock.js';
 import { isDuplicateKey, withTransaction } from '../../platform/db/mongo.js';
 import { errors } from '../../platform/http/errors.js';
 import type { Limiter } from '../../platform/security/limiter.js';
-import { CAMPUS_LABELS, type AccountsApi, type StudentCard } from '../accounts/index.js';
+import { CAMPUS_LABELS, STUDENT_NUMBER_RE, type AccountsApi, type StudentCard } from '../accounts/index.js';
 import type { AlertsApi } from '../alerts/index.js';
 import type { MediaApi } from '../media/index.js';
 import type { ConversationMember, MessagingApi } from '../messaging/index.js';
@@ -359,7 +359,7 @@ export class LostService {
   async lookupCard(userId: ObjectId, number: string) {
     await this.limiter.hit(`lost-card-lookup:${userId.toHexString()}`, { limit: 30, windowS: 3600 });
     const n = number.toUpperCase().replace(/\s/g, '');
-    if (!/^P\d{6}$/.test(n)) throw errors.validation('Numéro étudiant invalide. Exemple : P232055', { field: 'number' });
+    if (!STUDENT_NUMBER_RE.test(n)) throw errors.validation('Numéro étudiant invalide. Exemple : P232055', { field: 'number' });
     const owner = await this.accounts.studentByNumber(n);
     return { studentNumber: n, owner: owner ? this.match(owner) : null };
   }

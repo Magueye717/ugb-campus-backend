@@ -3,11 +3,11 @@ import type { Db } from 'mongodb';
 
 import type { Clock } from '../../platform/clock.js';
 import type { NotificationsApi } from '../notifications/index.js';
-import { ratingsCollections } from './ratings.collections.js';
+import { ratingsCollections, ratingsMigrations } from './ratings.collections.js';
 import { registerRatingsRoutes } from './ratings.routes.js';
 import { RatingsService, type RatingTargets } from './ratings.service.js';
 
-export { ratingsCollections };
+export { ratingsCollections, ratingsMigrations };
 
 export const RATINGS_SWEEP_QUEUE = 'ratings.sweep';
 

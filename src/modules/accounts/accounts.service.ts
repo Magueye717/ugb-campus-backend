@@ -25,7 +25,28 @@ export class AccountsService {
     private readonly repo: AccountsRepository,
     private readonly clock: Clock,
     private readonly organizations: () => OrganizationsPort,
+    /** "10-01": the rentrée, each year (Dakar is UTC+0). */
+    private readonly rentree = '10-01',
   ) {}
+
+  // ---- Once a year: UFR, region and card details --------------------------------------------------------
+
+  /** The last rentrée on or before `now`, and the next one after it. */
+  private rentrees(now: Date) {
+    const at = (year: number) => new Date(`${year}-${this.rentree}T00:00:00.000Z`);
+    const year = now.getUTCFullYear();
+    const last = at(year) <= now ? at(year) : at(year - 1);
+    return { last, next: at(last.getUTCFullYear() + 1) };
+  }
+
+  /** Given since the last rentrée: locked until the next one (the date), else null (free to change). */
+  private lockedUntil(setAt: Date | null | undefined, now: Date) {
+    if (!setAt) return null;
+    const { last, next } = this.rentrees(now);
+    return setAt >= last ? next : null;
+  }
+
+  private static frDate = new Intl.DateTimeFormat('fr-FR', { timeZone: 'Africa/Dakar', day: 'numeric', month: 'long', year: 'numeric' });
 
   // ---- Validation shared by sign-up and profile edits -------------------------------------------------
 
@@ -153,6 +174,7 @@ export class AccountsService {
       room: input.room,
       ufr: input.ufr,
       region: input.region,
+      originSetAt: input.ufr || input.region ? now : null,
       filiere: null,
       niveau: null,
       academicGroupIds: [],
@@ -319,6 +341,9 @@ export class AccountsService {
             identity: profile.identity
               ? { birthDate: profile.identity.birthDate, birthPlace: profile.identity.birthPlace, nationality: profile.identity.nationality, fromCard: profile.identity.source === 'card', updatedAt: profile.identity.updatedAt.toISOString() }
               : null,
+            // Until the next rentrée, what's filled stays (null: free to change).
+            originEditableFrom: this.lockedUntil(profile.ufr || profile.region ? (profile.originSetAt ?? profile.createdAt) : null, this.clock.now())?.toISOString() ?? null,
+            identityEditableFrom: this.lockedUntil(profile.identity?.source === 'card' ? profile.identity.updatedAt : null, this.clock.now())?.toISOString() ?? null,
           }
         : null,
       spaces,
@@ -352,7 +377,14 @@ export class AccountsService {
   async updateOrigin(userId: ObjectId, input: { ufr: string; region: string }) {
     const profile = await this.repo.findProfileByUserId(userId);
     if (!profile) throw errors.forbidden('Réservé aux étudiants.');
-    await this.repo.updateProfile(userId, this.origin(input), this.clock.now());
+    const now = this.clock.now();
+    const next = this.origin(input);
+    // Given this year: a filled field stays until the rentrée; an empty one can still be filled.
+    const until = this.lockedUntil(profile.originSetAt ?? profile.createdAt, now);
+    if (until && ((profile.ufr && profile.ufr !== next.ufr) || (profile.region && profile.region !== next.region))) {
+      throw errors.conflict('ORIGIN_LOCKED', `Ton UFR et ta région se changent une fois par an : modifiables à la rentrée, le ${AccountsService.frDate.format(until)}.`, { editableFrom: until.toISOString() });
+    }
+    await this.repo.updateProfile(userId, { ...next, originSetAt: now }, now);
   }
 
   /** The student's own card was just read and its number is theirs: they may save their identity for a while. */
@@ -368,7 +400,15 @@ export class AccountsService {
     const profile = await this.repo.findProfileByUserId(userId);
     if (!profile) throw errors.forbidden('Réservé aux étudiants.');
     const now = this.clock.now();
-    if (profile.identity?.source === 'card') throw errors.conflict('IDENTITY_LOCKED', 'Tes informations ont déjà été enregistrées depuis ta carte : elles ne peuvent plus être modifiées.');
+    // Saved from the card this year: a filled field stays until the rentrée (new card); an empty one can be filled.
+    const saved = profile.identity?.source === 'card' ? profile.identity : null;
+    const until = this.lockedUntil(saved?.updatedAt, now);
+    if (saved && until) {
+      const changes = (old: string | null, v: string | null) => old !== null && (v?.trim().replace(/\s+/g, ' ') || null) !== old;
+      if (changes(saved.birthDate, input.birthDate) || changes(saved.birthPlace, input.birthPlace) || changes(saved.nationality, input.nationality)) {
+        throw errors.conflict('IDENTITY_LOCKED', `Enregistré depuis ta carte cette année : modifiable à la rentrée, le ${AccountsService.frDate.format(until)}.`, { editableFrom: until.toISOString() });
+      }
+    }
     if (!profile.cardReadAt || now.getTime() - profile.cardReadAt.getTime() > 30 * 60_000) {
       throw errors.rule('CARD_SCAN_REQUIRED', 'Scanne d’abord ta carte étudiant : son numéro doit être le tien.');
     }
@@ -448,8 +488,11 @@ export class AccountsService {
   }
 
   /** The profile picture (an upload of purpose `avatar`), or none. */
+  /** Returns the picture it replaced (to delete from the storage), if any. */
   async setAvatar(userId: ObjectId, avatar: UserDoc['avatar']) {
+    const before = (await this.repo.findUserById(userId))?.avatar ?? null;
     await this.repo.setUserFields(userId, { avatar }, this.clock.now());
+    return before && !(avatar && avatar.mediaId.equals(before.mediaId)) ? before.mediaId : null;
   }
 
   async setEmail(userId: ObjectId, input: string) {

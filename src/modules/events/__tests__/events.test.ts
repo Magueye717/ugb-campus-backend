@@ -158,7 +158,7 @@ describe('students’ events', () => {
     const admin = { userId: (await createStaff(t, ['admin'])).userId.toHexString() };
     expect((await ok(call(s, 'GET', '/me/events'))).items).toEqual([]);
     // The price of the publication is known before creating anything.
-    expect(await ok(call(s, 'GET', '/me/events/publication-fee'))).toEqual({ perPlace: 50, minimum: 500 });
+    expect(await ok(call(s, 'GET', '/me/events/publication-fee'))).toEqual({ perPlace: 40, minimum: 500 });
     const pic = (await t.c.modules.media.service.upload(new ObjectId(s.userId), 'event', await picture(), 'http://test/api/v1'))._id.toHexString();
     const body = {
       title: 'Soirée karaoké Village E', category: 'soiree', description: 'Micro ouvert.', imageIds: [pic], venue: { name: 'Foyer Village E' },
@@ -184,7 +184,7 @@ describe('students’ events', () => {
     await ok(call(s, 'PUT', `/me/events/${draft.id}`, { ...body, endsAt: at(4 * DAY + 5 * HOUR) }));
     await ok(call(s, 'POST', `/me/events/${draft.id}/submit`));
     const approved = await ok(call(admin, 'POST', `/admin/events/${draft.id}/approve`));
-    expect(approved).toMatchObject({ status: 'approved', review: null, salesOpen: false, publication: null, publicationFee: { perPlace: 50, minimum: 500 } });
+    expect(approved).toMatchObject({ status: 'approved', review: null, salesOpen: false, publication: null, publicationFee: { perPlace: 40, minimum: 500 } });
     expect(approved.reviewLog.map((r: { action: string }) => r.action)).toEqual(['submitted', 'changes_requested', 'submitted', 'approved']);
     expect((await ok(call(s, 'GET', '/notifications'))).items[0]).toMatchObject({ type: 'event.approved' });
     const buyer = await registerStudent(t); // Campus 1, Village E, SAT
@@ -200,8 +200,8 @@ describe('students’ events', () => {
     const first = await ok(call(s, 'POST', `/me/events/${draft.id}/publish`, { ...publication, places: [{ typeId, capacity: 5 }] }));
     expect(first.payment.amount).toBe(500); // the minimum
     const { event: paying, payment } = await ok(call(s, 'POST', `/me/events/${draft.id}/publish`, publication));
-    expect(payment.amount).toBe(3000); // 60 × 50
-    expect(paying).toMatchObject({ status: 'approved', description: 'Micro ouvert, jus offert.', publication: { places: 60, fee: 3000, paid: false, payment: { reference: payment.reference } } });
+    expect(payment.amount).toBe(2400); // 60 × 40
+    expect(paying).toMatchObject({ status: 'approved', description: 'Micro ouvert, jus offert.', publication: { places: 60, fee: 2400, paid: false, payment: { reference: payment.reference } } });
     // The replaced payment, paid late anyway, publishes nothing: it is refunded.
     await pay(first.payment.reference);
     expect((await ok(call(s, 'GET', `/payments/${first.payment.reference}`))).fulfillment).toBe('unfulfillable');

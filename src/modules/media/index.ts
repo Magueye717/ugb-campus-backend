@@ -16,12 +16,17 @@ import { createMediaStorage, LocalMediaStorage } from './media.storage.js';
 import { MEDIA_PURPOSES } from './media.types.js';
 
 export { mediaCollections };
+export type { MediaUsage } from './media.types.js';
+
+export const MEDIA_SWEEP_QUEUE = 'media.sweep';
 
 /** Uploaded files above this are refused before being read. */
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
-export type MediaApi = Pick<MediaService, 'claim'> & {
+export type MediaApi = Pick<MediaService, 'claim' | 'release' | 'trackUsage'> & {
   registerRoutes(app: FastifyInstance): Promise<void>;
+  processors(): Record<string, () => Promise<unknown>>;
+  schedules: { queue: string; everyMs: number }[];
   /** Tests. */
   service: MediaService;
 };
@@ -68,5 +73,13 @@ export function createMediaModule(d: { db: Db; clock: Clock; config: Config; lim
     }
   };
 
-  return { claim: (o, ids) => service.claim(o, ids), registerRoutes, service };
+  return {
+    claim: (o, ids) => service.claim(o, ids),
+    release: (ids) => service.release(ids),
+    trackUsage: (u) => service.trackUsage(u),
+    registerRoutes,
+    processors: () => ({ [MEDIA_SWEEP_QUEUE]: () => service.sweep() }),
+    schedules: [{ queue: MEDIA_SWEEP_QUEUE, everyMs: 3600_000 }],
+    service,
+  };
 }

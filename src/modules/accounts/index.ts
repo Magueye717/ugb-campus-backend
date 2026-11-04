@@ -6,7 +6,7 @@ import type { Clock } from '../../platform/clock.js';
 import { errors } from '../../platform/http/errors.js';
 import { toObjectId } from '../../platform/http/schemas.js';
 import type { AuditApi } from '../audit/index.js';
-import type { MediaApi } from '../media/index.js';
+import type { MediaApi, MediaUsage } from '../media/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
 import { accountsCollections, accountsMigrations } from './accounts.collections.js';
 import { AccountsRepository } from './accounts.repository.js';
@@ -17,7 +17,7 @@ import type { OrganizationsPort, PlatformRole } from './accounts.types.js';
 
 export type { StudentCard } from './accounts.service.js';
 export type { Audience, AudienceProfile, Campus, NewStudentAccount, OrganizationsPort, MembershipSummary, PlatformRole, Region, UfrCode, UserDoc } from './accounts.types.js';
-export { CAMPUS_LABELS, CAMPUSES, PLATFORM_ROLE_LABELS, PLATFORM_ROLES, REGIONS, UFR_CODES, UFRS, VILLAGES } from './accounts.types.js';
+export { CAMPUS_LABELS, CAMPUSES, PLATFORM_ROLE_LABELS, PLATFORM_ROLES, REGIONS, STUDENT_NUMBER_MAX, STUDENT_NUMBER_RE, UFR_CODES, UFRS, VILLAGES } from './accounts.types.js';
 export type { StudentProfileInput } from './accounts.service.js';
 export { CampusSchema, RegionInput, UfrInput } from './accounts.schemas.js';
 export { accountsCollections, accountsMigrations };
@@ -39,8 +39,11 @@ export type AccountsApi = Pick<
   registerRoutes(app: FastifyInstance): void;
 };
 
-export function createAccountsModule(deps: { db: Db; clock: Clock; audit: AuditApi; organizations: () => OrganizationsPort; notifications: () => NotificationsApi; media: () => Pick<MediaApi, 'claim'> }): AccountsApi {
-  const service = new AccountsService(new AccountsRepository(deps.db), deps.clock, deps.organizations);
+/** Profile pictures. The media module deletes a picture once none of these reference it. */
+export const ACCOUNTS_MEDIA_USAGE: MediaUsage[] = [{ collection: 'users', path: 'avatar.mediaId' }];
+
+export function createAccountsModule(deps: { db: Db; clock: Clock; rentree: string; audit: AuditApi; organizations: () => OrganizationsPort; notifications: () => NotificationsApi; media: () => Pick<MediaApi, 'claim' | 'release'> }): AccountsApi {
+  const service = new AccountsService(new AccountsRepository(deps.db), deps.clock, deps.organizations, deps.rentree);
   const team = new PlatformTeam(deps.db, deps.clock, service, deps.notifications);
 
   const requireStudent: preHandlerHookHandler = async (req) => {
@@ -90,7 +93,7 @@ export function createAccountsModule(deps: { db: Db; clock: Clock; audit: AuditA
     requireAnyPlatformRole,
     restosOf: (u) => team.restosOf(u),
     registerRoutes: (app) => {
-      registerAccountsRoutes(app, { service, audit: deps.audit, requireStudent, requireAdmin: requirePlatformRole('admin'), claimImage: (u, id) => deps.media().claim(u, [id]).then((r) => r[0]!) });
+      registerAccountsRoutes(app, { service, audit: deps.audit, requireStudent, requireAdmin: requirePlatformRole('admin'), claimImage: (u, id) => deps.media().claim(u, [id]).then((r) => r[0]!), releaseImages: (ids) => deps.media().release(ids) });
       registerTeamRoutes(app, { team, audit: deps.audit, requireAdmin: requirePlatformRole('admin') });
     },
   };

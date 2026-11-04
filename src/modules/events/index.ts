@@ -5,7 +5,7 @@ import type { Clock } from '../../platform/clock.js';
 import type { Limiter } from '../../platform/security/limiter.js';
 import type { AccountsApi } from '../accounts/index.js';
 import type { AuditApi } from '../audit/index.js';
-import type { MediaApi } from '../media/index.js';
+import type { MediaApi, MediaUsage } from '../media/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
 import type { OrganizationsApi } from '../organizations/index.js';
 import type { PaymentsApi } from '../payments/index.js';
@@ -15,6 +15,8 @@ import { registerEventsRoutes } from './events.routes.js';
 import { EventsService } from './events.service.js';
 
 export { eventsCollections, eventsMigrations };
+/** The rules quoted in the terms of use (legal module). */
+export { LATE_CANCEL_FEE, PUBLICATION_FEE } from './events.types.js';
 
 export const EVENTS_SWEEP_QUEUE = 'events.sweep';
 
@@ -25,6 +27,9 @@ export type EventsApi = Pick<EventsService, 'promotable' | 'summaries'> & {
   /** Tests and the seed. */
   service: EventsService;
 };
+
+/** Event pictures. The media module deletes a picture once none of these reference it. */
+export const EVENTS_MEDIA_USAGE: MediaUsage[] = [{ collection: 'events', path: 'images.mediaId' }];
 
 export function createEventsModule(d: {
   db: Db;

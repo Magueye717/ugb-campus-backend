@@ -5,7 +5,7 @@ import type { Clock } from '../../platform/clock.js';
 import type { Limiter } from '../../platform/security/limiter.js';
 import type { AuditApi } from '../audit/index.js';
 import type { EventsApi } from '../events/index.js';
-import type { MediaApi } from '../media/index.js';
+import type { MediaApi, MediaUsage } from '../media/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
 import type { OrganizationsApi } from '../organizations/index.js';
 import type { PaymentsApi } from '../payments/index.js';
@@ -20,6 +20,9 @@ export type BannersApi = {
   /** Tests and the seed. */
   service: BannersService;
 };
+
+/** Banner pictures (an event's banner may reuse the event's picture). The media module deletes a picture once none of these reference it. */
+export const BANNERS_MEDIA_USAGE: MediaUsage[] = [{ collection: 'banners', path: 'image.mediaId' }];
 
 export function createBannersModule(d: {
   db: Db;

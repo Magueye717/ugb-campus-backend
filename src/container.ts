@@ -1,19 +1,19 @@
 import type { Redis } from 'ioredis';
 
 import type { Config } from './config/env.js';
-import { createAccountsModule, type AccountsApi } from './modules/accounts/index.js';
+import { ACCOUNTS_MEDIA_USAGE, createAccountsModule, type AccountsApi } from './modules/accounts/index.js';
 import { createAlertsModule, type AlertsApi } from './modules/alerts/index.js';
 import { createMediaModule, type MediaApi } from './modules/media/index.js';
-import { createEventsModule, type EventsApi } from './modules/events/index.js';
-import { createBannersModule, type BannersApi } from './modules/banners/index.js';
+import { createEventsModule, EVENTS_MEDIA_USAGE, type EventsApi } from './modules/events/index.js';
+import { BANNERS_MEDIA_USAGE, createBannersModule, type BannersApi } from './modules/banners/index.js';
 import { createPublicRestosModule, type PublicRestosApi } from './modules/public-restos/index.js';
-import { createLostModule, TesseractCardReader, type CardReader, type LostApi } from './modules/lost/index.js';
-import { createCommerceModule, type CommerceApi } from './modules/commerce/index.js';
-import { createPlacesModule, type PlacesApi } from './modules/places/index.js';
+import { createLostModule, LOST_MEDIA_USAGE, TesseractCardReader, type CardReader, type LostApi } from './modules/lost/index.js';
+import { COMMERCE_MEDIA_USAGE, createCommerceModule, type CommerceApi } from './modules/commerce/index.js';
+import { createPlacesModule, PLACES_MEDIA_USAGE, type PlacesApi } from './modules/places/index.js';
 import { createRatingsModule, type RatingsApi } from './modules/ratings/index.js';
 import { createAuditModule, type AuditApi } from './modules/audit/index.js';
 import { createIdentityModule, type IdentityApi } from './modules/identity/index.js';
-import { createOrganizationsModule, type OrganizationsApi } from './modules/organizations/index.js';
+import { createOrganizationsModule, ORGANIZATIONS_MEDIA_USAGE, type OrganizationsApi } from './modules/organizations/index.js';
 import { createCaravansModule, type CaravansApi } from './modules/caravans/index.js';
 import { createMessagingModule, type MessagingApi } from './modules/messaging/index.js';
 import { createNotificationsModule, type NotificationsApi } from './modules/notifications/index.js';
@@ -58,7 +58,7 @@ export async function createContainer(config: Config, opts: { clock?: Clock; war
   const audit = createAuditModule(mongo.db, clock);
   // accounts needs organization memberships for /me, organizations needs accounts: the port is resolved lazily.
   const late: { organizations?: OrganizationsApi; notifications?: NotificationsApi; media?: MediaApi } = {};
-  const accounts = createAccountsModule({ db: mongo.db, clock, audit, organizations: () => late.organizations!, notifications: () => late.notifications!, media: () => late.media! });
+  const accounts = createAccountsModule({ db: mongo.db, clock, rentree: config.ACADEMIC_YEAR_START, audit, organizations: () => late.organizations!, notifications: () => late.notifications!, media: () => late.media! });
   const organizations = (late.organizations = createOrganizationsModule({ db: mongo.db, clock, accounts, audit, notifications: () => late.notifications! }));
   const identity = createIdentityModule({ db: mongo.db, mongo: mongo.client, config, clock, queues, limiter, tokens, denylist, accounts, audit });
   const notifications = (late.notifications = createNotificationsModule({ db: mongo.db, clock, hub, queues, accounts, config }));
@@ -81,6 +81,8 @@ export async function createContainer(config: Config, opts: { clock?: Clock; war
   const lost = createLostModule({
     db: mongo.db, mongo: mongo.client, clock, accounts, messaging, notifications, alerts, media, limiter, audit, reader: opts.cardReader ?? new TesseractCardReader(config.OCR_CACHE_DIR),
   });
+  // Where pictures are kept: one that none of these reference any more is deleted from the storage.
+  media.trackUsage([...ACCOUNTS_MEDIA_USAGE, ...ORGANIZATIONS_MEDIA_USAGE, ...COMMERCE_MEDIA_USAGE, ...BANNERS_MEDIA_USAGE, ...EVENTS_MEDIA_USAGE, ...PLACES_MEDIA_USAGE, ...LOST_MEDIA_USAGE]);
 
   return {
     config,

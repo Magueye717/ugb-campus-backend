@@ -29,6 +29,8 @@ export const MeResponse = Type.Object({
           { description: 'Optional; best read from the student’s own card (POST /me/student-card/read).' },
         ),
       ),
+      originEditableFrom: Nullable(Type.String({ description: 'UFR and region given this academic year: the filled ones change from this date (the next rentrée). Null: free to change.' })),
+      identityEditableFrom: Nullable(Type.String({ description: 'Card details saved this academic year: the filled ones change from this date (the next rentrée). Null: free to change.' })),
     }),
   ),
   /** Drives AuthContext.spaces in the app. */
@@ -88,6 +90,7 @@ export const StudentReference = Type.Object({
   campuses: Type.Array(Type.Object({ key: Type.String(), label: Type.String(), villages: Type.Array(Type.String()) })),
   ufrs: Type.Array(Type.Object({ code: Type.String(), name: Type.String() })),
   regions: Type.Array(Type.String()),
+  studentNumber: Type.Object({ pattern: Type.String({ description: 'Checked once spaces are removed and letters upper-cased.' }), maxLength: Type.Integer(), example: Type.String() }),
 });
 
 export const NotificationPrefsSchema = Type.Object(

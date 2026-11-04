@@ -12,6 +12,7 @@ import { organizationsCollections, organizationsMigrations } from './organizatio
 import { registerOrganizationsRoutes } from './organizations.routes.js';
 import { OrganizationsService, type CreateOrgInput } from './organizations.service.js';
 import { ORG_SPACES, type OrgCapability, type OrgRole, type OrgSpace } from './organizations.types.js';
+import type { MediaUsage } from '../media/index.js';
 
 export { organizationsCollections, organizationsMigrations };
 export type { OrgCapability, OrgRole, OrgLevel, OrgCategory, OrgSpace } from './organizations.types.js';
@@ -50,6 +51,9 @@ export type OrganizationsApi = OrganizationsPort & {
   setRating(orgId: ObjectId, avg: number | null, count: number): Promise<void>;
   registerRoutes(app: FastifyInstance, requireAdmin: preHandlerHookHandler): void;
 };
+
+/** Organization logos. The media module deletes a picture once none of these reference it. */
+export const ORGANIZATIONS_MEDIA_USAGE: MediaUsage[] = [{ collection: 'organizations', path: 'logo.mediaId' }];
 
 export function createOrganizationsModule(deps: { db: Db; clock: Clock; accounts: AccountsApi; audit: AuditApi; notifications: () => NotificationsApi }): OrganizationsApi {
   const service = new OrganizationsService(deps.db, deps.clock, deps.accounts, deps.notifications);

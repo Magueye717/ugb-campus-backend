@@ -197,7 +197,7 @@ export function registerLostRoutes(root: FastifyInstance, { service, audit, requ
 
   app.get(
     '/lost/cards/lookup',
-    { ...student, schema: { tags, querystring: Type.Object({ number: Type.String({ maxLength: 12 }) }, { additionalProperties: false }), response: { 200: Type.Object({ studentNumber: Type.String(), owner: Nullable(StudentMatch) }) } } },
+    { ...student, schema: { tags, querystring: Type.Object({ number: Type.String({ maxLength: 30 }) }, { additionalProperties: false }), response: { 200: Type.Object({ studentNumber: Type.String(), owner: Nullable(StudentMatch) }) } } },
     async (req) => service.lookupCard(me(req), req.query.number),
   );
 

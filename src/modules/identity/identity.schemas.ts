@@ -18,7 +18,7 @@ export const TokensSchema = Type.Object({
   refreshTokenExpiresAt: Type.String(),
 });
 
-export const CheckBody = Type.Object({ phone: PhoneInput, studentNumber: Type.String({ minLength: 1, maxLength: 12 }) }, { additionalProperties: false });
+export const CheckBody = Type.Object({ phone: PhoneInput, studentNumber: Type.String({ minLength: 1, maxLength: 30 }) }, { additionalProperties: false });
 export const CheckResponse = Type.Object({
   available: Type.Boolean(),
   conflict: Type.Optional(Type.Union([Type.Literal('phone'), Type.Literal('student_number')])),
@@ -27,7 +27,10 @@ export const CheckResponse = Type.Object({
 });
 
 export const OtpBody = Type.Object({ phone: PhoneInput, purpose: Purpose, channel: Type.Optional(Channel) }, { additionalProperties: false });
-export const ChallengeResponse = Type.Object({ challengeId: Type.String(), expiresIn: Type.Number(), resendAfter: Type.Number(), codeLength: Type.Number() });
+export const ChallengeResponse = Type.Object({
+  challengeId: Type.String(), expiresIn: Type.Number(), resendAfter: Type.Number(), codeLength: Type.Number(),
+  devCode: Type.Optional(Type.String({ description: 'Development only (OTP_DEV_MODE): the fixed code. Never present in production.' })),
+});
 export const ChallengeParams = Type.Object({ challengeId: ObjectIdString }, { additionalProperties: false });
 export const ResendBody = Type.Object({ channel: Type.Optional(Channel) }, { additionalProperties: false });
 export const VerifyBody = Type.Object({ code: Type.String({ minLength: 4, maxLength: 8, pattern: '^[0-9]+$' }) }, { additionalProperties: false });
@@ -36,7 +39,7 @@ export const VerifyResponse = Type.Object({ verificationToken: Type.String() });
 export const RegisterBody = Type.Object(
   {
     verificationToken: Type.String({ minLength: 10, maxLength: 2000 }),
-    studentNumber: Type.String({ minLength: 1, maxLength: 12 }),
+    studentNumber: Type.String({ minLength: 1, maxLength: 30, description: 'P then digits, 12 characters at most once spaces are removed.' }),
     firstName: Type.String({ minLength: 1, maxLength: 60 }),
     lastName: Type.String({ minLength: 1, maxLength: 60 }),
     campus: CampusSchema,

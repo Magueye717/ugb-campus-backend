@@ -9,6 +9,20 @@ describe('configuration', () => {
     expect(() => loadConfig({ NODE_ENV: 'production', PAYMENTS_SIMULATOR: 'true' })).toThrow(/PAYMENTS_SIMULATOR/);
   });
 
+  it('staging may keep test codes, logged SMS and simulated payments, nothing else', () => {
+    const staging = { NODE_ENV: 'production', STAGING: 'true', OTP_DEV_MODE: 'true', SMS_PROVIDER: 'console', PAYMENTS_SIMULATOR: 'true' };
+    const err = (() => {
+      try {
+        loadConfig(staging);
+        return '';
+      } catch (e) {
+        return (e as Error).message;
+      }
+    })();
+    expect(err).not.toMatch(/OTP_DEV_MODE|SMS_PROVIDER|PAYMENTS_SIMULATOR/);
+    expect(err).toMatch(/OTP_PEPPER.*JWT keys/);
+  });
+
   it('reports invalid fields without echoing any value', () => {
     const secret = 'super-secret-pepper-value-0123456789abcdef';
     try {

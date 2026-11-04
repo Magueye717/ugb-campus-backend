@@ -20,7 +20,7 @@ export type EventStatus = (typeof EVENT_STATUSES)[number];
 export type EventAudience = Audience & { villages: string[] };
 
 /** A student's event is published once the owner pays: so much per place put on sale, with a minimum. */
-export const PUBLICATION_FEE = { perPlace: 50, minimum: 500 };
+export const PUBLICATION_FEE = { perPlace: 40, minimum: 500 };
 export const publicationFee = (places: number) => Math.max(PUBLICATION_FEE.minimum, places * PUBLICATION_FEE.perPlace);
 
 /** "Standard 2 000 FCFA", "VIP 5 000 FCFA": its own price and number of places. Price 0: free (registration). */

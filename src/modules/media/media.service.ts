@@ -6,19 +6,25 @@ import { errors } from '../../platform/http/errors.js';
 import type { ImageRef } from '../../platform/media.js';
 import type { Limiter } from '../../platform/security/limiter.js';
 import type { MediaStorage } from './media.storage.js';
-import type { MediaDoc, MediaPurpose } from './media.types.js';
+import type { MediaDoc, MediaPurpose, MediaUsage } from './media.types.js';
 
 /** Longest side after re-encoding: sharp on a phone, light on mobile data. */
 const MAX_SIDE = 1600;
 /** Smallest accepted side: a blurry thumbnail makes a bad banner. */
 const MIN_SIDE = 320;
 const ACCEPTED = new Set(['jpeg', 'png', 'webp', 'heif', 'avif']);
+/** An upload is attached by a second request (the form is saved after the picture is sent): left alone this long. */
+const UNATTACHED_GRACE_MS = 24 * 3600_000;
+/** A picture found in use is checked again this much later (its entity may have been deleted since). */
+const RECHECK_MS = 7 * 24 * 3600_000;
+const SWEEP_BATCH = 200;
 
 export class MediaService {
   private readonly media: Collection<MediaDoc>;
+  private readonly usages: MediaUsage[] = [];
 
   constructor(
-    db: Db,
+    private readonly db: Db,
     private readonly clock: Clock,
     private readonly storage: MediaStorage,
     private readonly limiter: Limiter,
@@ -67,5 +73,58 @@ export class MediaService {
       if (!m) throw errors.validation('Image inconnue : envoie-la d’abord.', { field: 'images' });
       return { mediaId: m._id, url: m.url };
     });
+  }
+
+  /** Each module that keeps pictures says where: a picture referenced in none of these places can be deleted. */
+  trackUsage(usages: MediaUsage[]) {
+    this.usages.push(...usages);
+  }
+
+  private async inUse(id: ObjectId) {
+    for (const u of this.usages) if (await this.db.collection(u.collection).findOne({ [u.path]: id }, { projection: { _id: 1 } })) return true;
+    return false;
+  }
+
+  /**
+   * After an entity dropped pictures (replaced, removed, entity deleted), once that change is saved: each one that
+   * nothing else references (a banner may reuse its event's picture) is deleted from the storage, then forgotten.
+   * Never throws: what fails here is retried by the sweep.
+   */
+  async release(ids: (ObjectId | null | undefined)[]): Promise<number> {
+    const unique = [...new Map(ids.filter((x): x is ObjectId => !!x).map((id) => [id.toHexString(), id])).values()];
+    let deleted = 0;
+    for (const id of unique) deleted += await this.remove(id).catch(() => 0);
+    return deleted;
+  }
+
+  private async remove(id: ObjectId): Promise<number> {
+    if (await this.inUse(id)) return 0;
+    const doc = await this.media.findOne({ _id: id });
+    if (!doc) return 0;
+    await this.storage.delete(doc.key);
+    await this.media.deleteOne({ _id: id });
+    return 1;
+  }
+
+  /**
+   * Worker, hourly: uploads never attached (after a day) and pictures left behind by something that didn't release
+   * them (an entity deleted). The ones still in use are marked and looked at again a week later.
+   */
+  async sweep(): Promise<number> {
+    const now = this.clock.now();
+    const due = await this.media
+      .find(
+        { createdAt: { $lte: new Date(now.getTime() - UNATTACHED_GRACE_MS) }, $or: [{ checkedAt: { $exists: false } }, { checkedAt: { $lte: new Date(now.getTime() - RECHECK_MS) } }] },
+        { projection: { _id: 1 } },
+      )
+      .sort({ checkedAt: 1, createdAt: 1 })
+      .limit(SWEEP_BATCH)
+      .toArray();
+    let deleted = 0;
+    for (const { _id } of due) {
+      if (await this.inUse(_id)) await this.media.updateOne({ _id }, { $set: { checkedAt: now } });
+      else deleted += await this.remove(_id).catch(() => 0); // the storage failed: next sweep
+    }
+    return deleted;
   }
 }

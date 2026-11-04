@@ -78,19 +78,36 @@ export class RatingsService {
     return new Date(this.clock.now().getTime() - days * DAY);
   }
 
-  /** What to ask about now: ended lately, not rated, not declined, not put off too often. Newest first. */
+  /** One rating per restaurant or shop (all its orders), one per trip or event: what identifies it. */
+  private key(userId: ObjectId, r: Pick<Rateable, 'subject' | 'id' | 'businessId'>) {
+    return r.businessId ? { userId, businessId: r.businessId } : { userId, subject: r.subject, subjectId: r.id };
+  }
+  private static tag = (r: { businessId: ObjectId | null; subject: string; subjectId?: ObjectId; id?: ObjectId }) => (r.businessId ? `b:${r.businessId.toHexString()}` : `${r.subject}:${(r.subjectId ?? r.id)!.toHexString()}`);
+
+  /**
+   * What to ask about now: ended lately, and its restaurant/shop (or the trip, the event) not rated, declined or
+   * already asked about. One per business (the newest order). Newest first.
+   */
   async pending(userId: ObjectId) {
     const ended = await this.ended(userId, this.since(ASK_WITHIN_DAYS));
     if (!ended.length) return [];
-    const done = await this.ratings.find({ userId, subjectId: { $in: ended.map((r) => r.id) } }).toArray();
-    const settled = new Set(done.filter((d) => d.stars !== null || d.declined || d.prompts >= MAX_PROMPTS).map((d) => `${d.subject}:${d.subjectId.toHexString()}`));
-    return ended.filter((r) => !settled.has(`${r.subject}:${r.id.toHexString()}`));
+    const businesses = [...new Set(ended.flatMap((r) => (r.businessId ? [r.businessId.toHexString()] : [])))].map((id) => new ObjectId(id));
+    const done = await this.ratings.find({ userId, $or: [{ subjectId: { $in: ended.map((r) => r.id) } }, { businessId: { $in: businesses } }] }).toArray();
+    const settled = new Set(done.filter((d) => d.stars !== null || d.declined || d.prompts >= MAX_PROMPTS).map((d) => RatingsService.tag(d)));
+    const seen = new Set<string>();
+    return ended.filter((r) => {
+      const tag = RatingsService.tag(r);
+      if (settled.has(tag) || seen.has(tag)) return false;
+      seen.add(tag);
+      return true;
+    });
   }
 
   /** A service's rating card: whether it can be rated, and the student's rating if any. */
   async mine(userId: ObjectId, subject: RatingSubject, id: ObjectId) {
     const [rateable] = await this.ended(userId, this.since(RATE_WITHIN_DAYS), { subject, id });
-    const doc = await this.ratings.findOne({ userId, subject, subjectId: id });
+    // An order of a shop already rated shows that rating (one per shop): changing it changes the same one.
+    const doc = await this.ratings.findOne(rateable ? this.key(userId, rateable) : { userId, subject, subjectId: id });
     return { rateable: rateable ?? null, stars: doc?.stars ?? null, comment: doc?.comment ?? '' };
   }
 
@@ -102,8 +119,8 @@ export class RatingsService {
 
   private async upsert(userId: ObjectId, r: Rateable, set: Partial<RatingDoc>, inc?: Partial<Record<'prompts', number>>) {
     const now = this.clock.now();
-    const base = { userId, subject: r.subject, subjectId: r.id };
-    const insert: Partial<RatingDoc> = { _id: new ObjectId(), orgId: r.orgId, businessId: r.businessId, stars: null, comment: '', prompts: 0, declined: false, createdAt: now };
+    const base = this.key(userId, r);
+    const insert: Partial<RatingDoc> = { _id: new ObjectId(), subject: r.subject, subjectId: r.id, orgId: r.orgId, businessId: r.businessId, stars: null, comment: '', prompts: 0, declined: false, createdAt: now };
     for (const k of [...Object.keys(set), ...Object.keys(inc ?? {})]) delete insert[k as keyof RatingDoc];
     const update = { $set: { ...set, updatedAt: now }, $setOnInsert: insert, ...(inc ? { $inc: inc } : {}) };
     try {
@@ -120,7 +137,8 @@ export class RatingsService {
     if (!Number.isInteger(stars) || stars < 1 || stars > 5) throw errors.validation('De 1 à 5 étoiles.', { field: 'stars' });
     const r = await this.rateable(userId, subject, id);
     // Without a comment: the earlier one stays (changing the stars only).
-    const doc = await this.upsert(userId, r, { stars, declined: false, ...(comment !== undefined ? { comment: comment.trim() } : {}) });
+    // A shop's rating follows the latest order rated (still one per shop).
+    const doc = await this.upsert(userId, r, { stars, declined: false, ...(r.businessId ? { subjectId: r.id } : {}), ...(comment !== undefined ? { comment: comment.trim() } : {}) });
     await this.refresh(r);
     return doc;
   }

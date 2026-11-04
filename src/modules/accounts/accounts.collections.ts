@@ -41,7 +41,7 @@ export const accountsCollections: CollectionSpec[] = [
       $jsonSchema: bson.object(
         {
           userId: bson.objectId,
-          studentNumber: bson.string({ pattern: '^P\\d{6}$' }),
+          studentNumber: bson.string({ pattern: '^P\\d{6,11}$' }),
           campus: bson.enumOf(CAMPUSES),
           onCampus: bson.bool,
           village: { bsonType: ['string', 'null'] },

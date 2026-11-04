@@ -116,7 +116,8 @@ export class PaymentsService {
     } catch {
       throw errors.validation('Adresse de retour invalide.', { field: 'returnUrl' });
     }
-    const allowed = this.config.isProduction ? RETURN_SCHEMES : [...RETURN_SCHEMES, ...DEV_RETURN_SCHEMES];
+    // Staging is tested from Expo Go too.
+    const allowed = this.config.isProduction && !this.config.STAGING ? RETURN_SCHEMES : [...RETURN_SCHEMES, ...DEV_RETURN_SCHEMES];
     if (!allowed.includes(parsed.protocol)) throw errors.validation('Adresse de retour invalide.', { field: 'returnUrl' });
     return url;
   }

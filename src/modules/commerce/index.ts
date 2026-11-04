@@ -5,7 +5,7 @@ import type { Clock } from '../../platform/clock.js';
 import type { Limiter } from '../../platform/security/limiter.js';
 import type { AccountsApi } from '../accounts/index.js';
 import type { AuditApi } from '../audit/index.js';
-import type { MediaApi } from '../media/index.js';
+import type { MediaApi, MediaUsage } from '../media/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
 import type { OrganizationsApi } from '../organizations/index.js';
 import type { PaymentsApi } from '../payments/index.js';
@@ -24,6 +24,12 @@ export type CommerceApi = {
   /** Tests and the seed. */
   service: CommerceService;
 };
+
+/** Restaurant and shop photos, product photos. The media module deletes a picture once none of these reference it. */
+export const COMMERCE_MEDIA_USAGE: MediaUsage[] = [
+  { collection: 'businesses', path: 'photo.mediaId' },
+  { collection: 'catalogItems', path: 'photo.mediaId' },
+];
 
 export function createCommerceModule(d: {
   db: Db;

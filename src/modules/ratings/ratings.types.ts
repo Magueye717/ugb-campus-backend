@@ -7,11 +7,12 @@ export type RatingSubject = (typeof RATING_SUBJECTS)[number];
 /** Asked for during this long after the end; a rating can still be given (or changed) until `RATE_WITHIN_DAYS`. */
 export const ASK_WITHIN_DAYS = 7;
 export const RATE_WITHIN_DAYS = 30;
-/** "Plus tard" this many times: no more asking (the service's page still offers it). */
-export const MAX_PROMPTS = 3;
+/** Asked this many times at most (the sheet shown once is enough): then only the service's page offers it. */
+export const MAX_PROMPTS = 1;
 
 /**
- * One student's rating of one service (one per student and service). Optional: `stars` null while they haven't rated
+ * One student's rating: one per restaurant or shop (whatever the number of orders: the latest order rated is
+ * `subjectId`), one per caravan trip or event. Optional: `stars` null while they haven't rated
  * (postponed or declined). Organizers are rated through their trips and events, restaurants and shops through orders.
  */
 export type RatingDoc = {

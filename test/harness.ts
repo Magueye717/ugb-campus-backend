@@ -81,8 +81,10 @@ export async function registerStudent(t: TestApp, over: Partial<{ phone: string;
   const phone = over.phone ?? nextPhone();
   const studentNumber = over.studentNumber ?? nextStudentNumber();
   const otp = await t.app.inject({ method: 'POST', url: '/api/v1/auth/otp', payload: { phone, purpose: 'register' } });
-  const { challengeId } = json(otp);
-  const verify = await t.app.inject({ method: 'POST', url: `/api/v1/auth/otp/${challengeId}/verify`, payload: { code: '1234' } });
+  const { challengeId, devCode } = json(otp);
+  // Development mode sends the fixed code back, so the app can show it.
+  if (devCode !== '1234') throw new Error(`devCode should be 1234 in OTP_DEV_MODE, got ${devCode}`);
+  const verify = await t.app.inject({ method: 'POST', url: `/api/v1/auth/otp/${challengeId}/verify`, payload: { code: devCode } });
   const { verificationToken } = json(verify);
   const res = await t.app.inject({
     method: 'POST',

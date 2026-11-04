@@ -72,7 +72,9 @@ export type Audience = { campuses: Campus[]; ufrs: UfrCode[]; regions: Region[] 
 /** What a viewer is matched on: null for accounts without a student profile (they see whole-university items only). */
 export type AudienceProfile = { campus: Campus; ufr: UfrCode | null; region: Region | null; village?: string | null } | null;
 
-export const STUDENT_NUMBER_RE = /^P\d{6}$/;
+/** Student numbers: P then digits, 12 characters at most ("P232055"), spaces removed and upper-cased first. */
+export const STUDENT_NUMBER_MAX = 12;
+export const STUDENT_NUMBER_RE = /^P\d{6,11}$/;
 export const ROOM_RE = /^[A-Z]?\d{1,4}[A-Z]?$/;
 export const NAME_RE = /^[A-Za-zÀ-ÖØ-öø-ÿ]+(?:[ '-][A-Za-zÀ-ÖØ-öø-ÿ]+)*$/;
 
@@ -123,6 +125,8 @@ export type StudentProfileDoc = {
   ufr: UfrCode | null;
   /** Home region (REGIONS). Asked at sign-up; null for accounts created before. */
   region: Region | null;
+  /** When the UFR or region was last given (sign-up, profile): unchanged until the next rentrée. Missing: `createdAt`. */
+  originSetAt?: Date | null;
   filiere: string | null;
   niveau: string | null;
   /**

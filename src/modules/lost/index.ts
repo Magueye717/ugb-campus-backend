@@ -6,7 +6,7 @@ import type { Limiter } from '../../platform/security/limiter.js';
 import type { AccountsApi } from '../accounts/index.js';
 import type { AlertsApi } from '../alerts/index.js';
 import type { AuditApi } from '../audit/index.js';
-import type { MediaApi } from '../media/index.js';
+import type { MediaApi, MediaUsage } from '../media/index.js';
 import type { MessagingApi } from '../messaging/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
 import { lostCollections } from './lost.collections.js';
@@ -23,6 +23,9 @@ export type LostApi = {
   /** Tests and the seed. */
   service: LostService;
 };
+
+/** Photos of declared objects. The media module deletes a picture once none of these reference it. */
+export const LOST_MEDIA_USAGE: MediaUsage[] = [{ collection: 'lostItems', path: 'photo.mediaId' }];
 
 export function createLostModule(d: {
   db: Db;

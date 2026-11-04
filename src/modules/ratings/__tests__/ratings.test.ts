@@ -97,13 +97,10 @@ describe('ratings', () => {
     expect(JSON.stringify(reviews)).not.toContain(String(student.userId));
   });
 
-  it('optional: « Plus tard » asks again a few times; « Ne pas noter » stops at once; too old: nothing to rate', async () => {
+  it('optional and asked once: after « Plus tard » it isn’t asked again (the page still offers it)', async () => {
     const first = await completedOrder();
-    for (let i = 0; i < 2; i++) {
-      expect((await call(first.student, 'POST', `/me/ratings/order/${first.order.id}/later`)).statusCode).toBe(204);
-      expect(await pending(first.student)).toHaveLength(1);
-    }
-    await call(first.student, 'POST', `/me/ratings/order/${first.order.id}/later`);
+    expect(await pending(first.student)).toHaveLength(1);
+    expect((await call(first.student, 'POST', `/me/ratings/order/${first.order.id}/later`)).statusCode).toBe(204);
     expect(await pending(first.student)).toEqual([]);
     // Still rateable from the order's page.
     expect((await ok(call(first.student, 'GET', `/me/ratings/order/${first.order.id}`))).rateable).not.toBeNull();
@@ -114,6 +111,23 @@ describe('ratings', () => {
     t.clock.set(T0 + 31 * DAY);
     expect((await ok(call(second.student, 'GET', `/me/ratings/order/${second.order.id}`))).rateable).toBeNull();
     expect((await call(second.student, 'PUT', `/me/ratings/order/${second.order.id}`, { stars: 3 })).statusCode).toBe(404);
+  });
+
+  it('one review per restaurant or shop: a second order isn’t asked about, and rating it changes the same review', async () => {
+    const { b, order, student } = await completedOrder();
+    await ok(call(student, 'PUT', `/me/ratings/order/${order.id}`, { stars: 2, comment: 'Lent' }));
+    // Another order at the same shop.
+    t.clock.set(T0 + HOUR);
+    const owner = { userId: (await t.c.mongo.db.collection('memberships').findOne({ orgId: new ObjectId(b.orgId), roles: 'owner' }))!.userId };
+    const pen = (await ok(call(student, 'GET', `/businesses/${b.id}`))).items[0];
+    const { order: again } = await ok(call(student, 'POST', `/businesses/${b.id}/orders`, { lines: [{ itemId: pen.id, qty: 1 }], mode: 'pickup', method: 'cash' }), 201);
+    await ok(call(owner, 'POST', `/org/${b.orgId}/shop/orders/${again.id}/accept`));
+    await ok(call(owner, 'POST', `/org/${b.orgId}/shop/orders/handover`, { code: again.code }));
+    expect(await pending(student)).toEqual([]);
+    // Its page shows the review already given; changing it doesn't add one.
+    expect(await ok(call(student, 'GET', `/me/ratings/order/${again.id}`))).toMatchObject({ stars: 2, comment: 'Lent' });
+    await ok(call(student, 'PUT', `/me/ratings/order/${again.id}`, { stars: 4 }));
+    expect(await ok(call(student, 'GET', `/businesses/${b.id}/reviews`))).toMatchObject({ count: 1, avg: 4, items: [{ stars: 4, comment: 'Lent' }] });
   });
 
   it('a caravan trip over: its traveller is notified once, rates it, and the organizer’s rating shows on its trips', async () => {

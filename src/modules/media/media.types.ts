@@ -20,4 +20,9 @@ export type MediaDoc = {
   height: number;
   bytes: number;
   createdAt: Date;
+  /** Last time the hourly sweep found it still attached somewhere: it is checked again a week later. */
+  checkedAt?: Date;
 };
+
+/** Where other modules keep picture references: a collection and the path of the `mediaId` (arrays included). */
+export type MediaUsage = { collection: string; path: string };

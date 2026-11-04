@@ -3,7 +3,7 @@ import type { Db } from 'mongodb';
 
 import type { Clock } from '../../platform/clock.js';
 import type { AuditApi } from '../audit/index.js';
-import type { MediaApi } from '../media/index.js';
+import type { MediaApi, MediaUsage } from '../media/index.js';
 import { placesCollections } from './places.collections.js';
 import { registerPlacesRoutes } from './places.routes.js';
 import { PlacesService } from './places.service.js';
@@ -15,6 +15,9 @@ export type PlacesApi = {
   /** Tests and the seed. */
   service: PlacesService;
 };
+
+/** Campus places photos. The media module deletes a picture once none of these reference it. */
+export const PLACES_MEDIA_USAGE: MediaUsage[] = [{ collection: 'places', path: 'photos.mediaId' }];
 
 export function createPlacesModule(d: { db: Db; clock: Clock; media: MediaApi; audit: AuditApi }): PlacesApi {
   const service = new PlacesService(d.db, d.clock, d.media);

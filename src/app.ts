@@ -13,6 +13,7 @@ import { authPlugin } from './platform/auth/auth.js';
 import { errors, registerErrorHandling } from './platform/http/errors.js';
 import { registerHealthRoutes } from './platform/observability/health.js';
 import { loggerOptions } from './platform/observability/logger.js';
+import { registerLegalRoutes } from './modules/legal/index.js';
 import { registerRealtimeGateway } from './platform/realtime/gateway.js';
 
 const REQUEST_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
@@ -71,6 +72,7 @@ export async function buildApp(c: Container, state = { shuttingDown: false }): P
       identity.registerRoutes(api);
       accounts.registerRoutes(api);
       // "Aide & support": the contacts come from the configuration, not the app.
+      registerLegalRoutes(api, { phone: c.config.SUPPORT_PHONE, email: c.config.SUPPORT_EMAIL });
       api.get('/reference/support', { schema: { tags: ['reference'] } }, async () => ({ phone: c.config.SUPPORT_PHONE, whatsapp: c.config.SUPPORT_PHONE, email: c.config.SUPPORT_EMAIL, hours: 'Lun.-sam. · 8h-20h' }));
       organizations.registerRoutes(api, accounts.requirePlatformRole('admin'));
       payments.registerRoutes(api, accounts.requirePlatformRole('finance'));

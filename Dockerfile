@@ -19,6 +19,8 @@ WORKDIR /app
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --chown=node:node package.json ./
+# Writable by the app: the OCR language data is downloaded here on first use (OCR_CACHE_DIR).
+RUN mkdir -p /app/var && chown node:node /app/var
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \

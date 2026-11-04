@@ -5,12 +5,22 @@ const Bool = Type.Union([Type.Boolean(), Type.Literal('true'), Type.Literal('fal
 
 const EnvSchema = Type.Object({
   NODE_ENV: Type.Union([Type.Literal('development'), Type.Literal('test'), Type.Literal('production')], { default: 'development' }),
+  /**
+   * A test deployment built like production (NODE_ENV=production, real secrets, bucket, push) that may still use test
+   * OTP codes, logged SMS and simulated payments, until the Orange and Wave accounts are live. Never on the students' server.
+   */
+  STAGING: Bool,
   HOST: Type.String({ default: '0.0.0.0' }),
   PORT: Type.Number({ default: 3000 }),
   LOG_LEVEL: Type.String({ default: 'info' }),
   // "Aide & support" in the app: who students call, message or write to.
   SUPPORT_PHONE: Type.String({ default: '777902880' }),
   SUPPORT_EMAIL: Type.String({ default: 'ugb.campus@gmail.com' }),
+  /**
+   * The rentrée, every year ("MM-DD", Dakar): once given, the student's UFR, region and card details stay as they are
+   * until the next one (a filled field can't be changed in between; an empty one can always be filled).
+   */
+  ACADEMIC_YEAR_START: Type.String({ pattern: '^(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$', default: '10-01' }),
   /** Behind a reverse proxy: trust X-Forwarded-For so rate limits see the real client IP. */
   TRUST_PROXY: Bool,
   /**
@@ -43,8 +53,16 @@ const EnvSchema = Type.Object({
   OTP_LENGTH: Type.Number({ default: 4, minimum: 4, maximum: 8 }),
   /** Development only: fixed code (1234…), logged instead of sent. Refused in production. */
   OTP_DEV_MODE: Bool,
-  /** `console` logs SMS (development); real providers are added once chosen (Q-14). */
-  SMS_PROVIDER: Type.Union([Type.Literal('console')], { default: 'console' }),
+  /** `console` logs SMS (development); `twilio` sends them. Orange's SMS API comes once the account is approved. */
+  SMS_PROVIDER: Type.Union([Type.Literal('console'), Type.Literal('twilio')], { default: 'console' }),
+  /** Twilio: the account (AC…), then an API key (SK… + secret) or the auth token. */
+  TWILIO_ACCOUNT_SID: Type.Optional(Type.String({ pattern: '^AC[0-9a-fA-F]{32}$' })),
+  TWILIO_API_KEY_SID: Type.Optional(Type.String({ pattern: '^SK[0-9a-fA-F]{32}$' })),
+  TWILIO_API_KEY_SECRET: Type.Optional(Type.String({ minLength: 16 })),
+  TWILIO_AUTH_TOKEN: Type.Optional(Type.String({ minLength: 16 })),
+  /** Sender: a Twilio number (+1…) or an approved sender name (≤ 11 letters/digits), or a Messaging Service (MG…). */
+  TWILIO_FROM: Type.Optional(Type.String({ pattern: '^(\\+[1-9][0-9]{6,14}|[A-Za-z0-9 ]{1,11})$' })),
+  TWILIO_MESSAGING_SERVICE_SID: Type.Optional(Type.String({ pattern: '^MG[0-9a-fA-F]{32}$' })),
 
   /**
    * Development only: Wave and Orange Money are simulated (checkout page + signed webhooks through the real code
@@ -87,7 +105,8 @@ const EnvSchema = Type.Object({
 
 type RawEnv = Type.Static<typeof EnvSchema>;
 
-export type Config = Omit<RawEnv, 'TRUST_PROXY' | 'DOCS_ENABLED' | 'OTP_DEV_MODE' | 'PAYMENTS_SIMULATOR' | 'SIMULATOR_WEBHOOK_SECRET' | 'JWT_PRIVATE_KEY_B64' | 'JWT_PUBLIC_KEY_B64' | 'OTP_PEPPER'> & {
+export type Config = Omit<RawEnv, 'STAGING' | 'TRUST_PROXY' | 'DOCS_ENABLED' | 'OTP_DEV_MODE' | 'PAYMENTS_SIMULATOR' | 'SIMULATOR_WEBHOOK_SECRET' | 'JWT_PRIVATE_KEY_B64' | 'JWT_PUBLIC_KEY_B64' | 'OTP_PEPPER'> & {
+  STAGING: boolean;
   TRUST_PROXY: boolean;
   DOCS_ENABLED: boolean;
   OTP_DEV_MODE: boolean;
@@ -117,6 +136,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
   const isProduction = raw.NODE_ENV === 'production';
   const config: Config = {
     ...raw,
+    STAGING: toBool(raw.STAGING),
     TRUST_PROXY: toBool(raw.TRUST_PROXY),
     DOCS_ENABLED: toBool(raw.DOCS_ENABLED),
     OTP_DEV_MODE: toBool(raw.OTP_DEV_MODE),
@@ -127,22 +147,34 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     isProduction,
     ...overrides,
   };
+  assertSmsSettings(config);
   assertProductionSafety(config);
   return config;
+}
+
+/** A provider named without its settings would only fail at the first SMS: refuse to boot instead (names only, no values). */
+function assertSmsSettings(c: Config) {
+  if (c.SMS_PROVIDER !== 'twilio') return;
+  const missing: string[] = [];
+  if (!c.TWILIO_ACCOUNT_SID) missing.push('TWILIO_ACCOUNT_SID');
+  if (c.TWILIO_API_KEY_SID ? !c.TWILIO_API_KEY_SECRET : !c.TWILIO_AUTH_TOKEN) missing.push(c.TWILIO_API_KEY_SID ? 'TWILIO_API_KEY_SECRET' : 'TWILIO_API_KEY_SID + TWILIO_API_KEY_SECRET (or TWILIO_AUTH_TOKEN)');
+  if (!c.TWILIO_FROM && !c.TWILIO_MESSAGING_SERVICE_SID) missing.push('TWILIO_FROM (or TWILIO_MESSAGING_SERVICE_SID)');
+  if (missing.length) throw new Error(`Invalid configuration: SMS_PROVIDER=twilio needs ${missing.join(', ')}`);
 }
 
 /** Development conveniences must never reach production: refuse to boot instead. */
 function assertProductionSafety(c: Config) {
   if (!c.isProduction) return;
   const problems: string[] = [];
-  if (c.OTP_DEV_MODE) problems.push('OTP_DEV_MODE must be false');
+  // Staging only: test codes, logged SMS and the payment simulator; every other rule stays.
+  if (c.OTP_DEV_MODE && !c.STAGING) problems.push('OTP_DEV_MODE must be false');
   if (c.MEDIA_STORAGE !== 's3') problems.push('MEDIA_STORAGE must be s3');
   if (c.MEDIA_STORAGE === 's3' && (!c.S3_BUCKET || !c.MEDIA_PUBLIC_URL || !c.S3_ACCESS_KEY_ID || !c.S3_SECRET_ACCESS_KEY)) problems.push('S3_BUCKET, MEDIA_PUBLIC_URL and S3 keys must be set');
   if (c.OTP_PEPPER === DEV_PEPPER) problems.push('OTP_PEPPER must be set');
   if (!c.jwt.privateKeyPem || !c.jwt.publicKeyPem) problems.push('JWT keys must be set');
-  if (c.SMS_PROVIDER === 'console') problems.push('a real SMS_PROVIDER is required');
+  if (c.SMS_PROVIDER === 'console' && !c.STAGING) problems.push('a real SMS_PROVIDER is required');
   if (c.RATE_LIMIT_SCALE !== 1) problems.push('RATE_LIMIT_SCALE must be 1');
-  if (c.PAYMENTS_SIMULATOR) problems.push('PAYMENTS_SIMULATOR must be false');
+  if (c.PAYMENTS_SIMULATOR && !c.STAGING) problems.push('PAYMENTS_SIMULATOR must be false');
   if (c.PUSH_PROVIDER === 'log') problems.push('PUSH_PROVIDER must be expo');
   if (problems.length) throw new Error(`Unsafe production configuration: ${problems.join('; ')}`);
 }

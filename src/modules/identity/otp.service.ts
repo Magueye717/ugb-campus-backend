@@ -34,7 +34,7 @@ export class OtpService {
   }
 
   private newCode() {
-    // Development: 1234 (the app shows DEV_OTP in dev builds). Refused in production by loadConfig.
+    // Development: 1234 (sent back as `devCode`, the app shows it). Refused in production by loadConfig.
     return this.config.OTP_DEV_MODE ? '12345678'.slice(0, this.config.OTP_LENGTH) : randomDigits(this.config.OTP_LENGTH);
   }
 
@@ -172,6 +172,8 @@ export class OtpService {
       expiresIn: Math.round((doc.expiresAt.getTime() - this.clock.now().getTime()) / 1000),
       resendAfter: OTP_RESEND_DELAY_S,
       codeLength: this.config.OTP_LENGTH,
+      // Development only (refused in production): the fixed code, so the app can show it; absent once codes are real.
+      ...(this.config.OTP_DEV_MODE ? { devCode: this.newCode() } : {}),
     };
   }
 }

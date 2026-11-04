@@ -21,7 +21,7 @@ import { publicRestosCollections, publicRestosMigrations } from './modules/publi
 import { lostCollections } from './modules/lost/index.js';
 import { commerceCollections, commerceMigrations } from './modules/commerce/index.js';
 import { placesCollections } from './modules/places/index.js';
-import { ratingsCollections } from './modules/ratings/index.js';
+import { ratingsCollections, ratingsMigrations } from './modules/ratings/index.js';
 
 /** Every collection the application owns: validators and indexes. */
 export const allCollections: CollectionSpec[] = [
@@ -30,7 +30,7 @@ export const allCollections: CollectionSpec[] = [
 ];
 
 /** One-time data changes, in the order they were written. */
-export const allDataMigrations: DataMigration[] = [...organizationsMigrations, ...accountsMigrations, ...ticketingMigrations, ...caravansMigrations, ...publicRestosMigrations, ...alertsMigrations, ...eventsMigrations, ...commerceMigrations];
+export const allDataMigrations: DataMigration[] = [...organizationsMigrations, ...accountsMigrations, ...ticketingMigrations, ...caravansMigrations, ...publicRestosMigrations, ...alertsMigrations, ...eventsMigrations, ...commerceMigrations, ...ratingsMigrations];
 
 /**
  * Brings a database up to date (`npm run migrate`, the seed and the tests).

@@ -1,3 +1,4 @@
+import { ObjectId } from 'mongodb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createTestApp, json, nextPhone, nextStudentNumber, registerStudent, type TestApp } from '../../../../test/harness.js';
@@ -103,9 +104,16 @@ describe('sign-up', () => {
     const me = json(await t.app.inject({ url: '/api/v1/me', headers: { authorization: `Bearer ${json(res).tokens.accessToken}` } }));
     expect(me.student).toMatchObject({ studentNumber: 'P777001', room: 'C12', ufr: 'SEG', region: 'Ziguinchor', verified: false });
     expect(me.spaces).toEqual([{ key: 'student', type: 'student', kind: null, orgId: null, name: 'Étudiant', roles: [], logoUrl: null, personal: false }]);
+    // Longer numbers too (P then digits, 12 characters at most); anything else: refused.
+    const long = `P${String(Date.now()).slice(-11)}`;
+    expect((await post('/auth/register', { verificationToken: await verified(nextPhone()), ...profile({ studentNumber: long.toLowerCase() }) })).statusCode).toBe(201);
+    for (const n of ['P12345', 'P-232-055', 'A2320551', `P${'1'.repeat(12)}`]) {
+      expect(json(await post('/auth/register', { verificationToken: await verified(nextPhone()), ...profile({ studentNumber: n }) })).field, n).toBe('studentNumber');
+    }
+    expect(json(await t.app.inject({ url: '/api/v1/reference/student' })).studentNumber).toEqual({ pattern: '^P\\d{6,11}$', maxLength: 12, example: 'P232055' });
   });
 
-  it('asks the UFR and the home region; the profile can change them; the lists are public', async () => {
+  it('asks the UFR and the home region; given, they change at the next rentrée only; the lists are public', async () => {
     const ref = json(await t.app.inject({ url: '/api/v1/reference/student' }));
     expect(ref.ufrs.map((u: { code: string }) => u.code)).toEqual(['SAT', 'LSH', 'SJP', 'SEG', 'S2ATA', '2S', 'SEFS', 'CRAC']);
     expect(ref.regions).toHaveLength(15);
@@ -118,8 +126,24 @@ describe('sign-up', () => {
     }
     const res = await post('/auth/register', { verificationToken: await verified(nextPhone()), ...profile() });
     const auth = { authorization: `Bearer ${json(res).tokens.accessToken}` };
+    const meNow = json(await t.app.inject({ url: '/api/v1/me', headers: auth }));
+    const before = meNow.student;
+    // Given at sign-up: locked until the next rentrée (1 October), said in the error and on /me.
+    expect(before.originEditableFrom).toBe('2027-10-01T00:00:00.000Z');
+    const locked = await t.app.inject({ method: 'PUT', url: '/api/v1/me/origin', headers: auth, payload: { ufr: 'SJP', region: 'Kolda' } });
+    expect([locked.statusCode, json(locked).code]).toEqual([409, 'ORIGIN_LOCKED']);
+    // Sending the same again changes nothing and is accepted.
+    expect((await t.app.inject({ method: 'PUT', url: '/api/v1/me/origin', headers: auth, payload: { ufr: before.ufr, region: before.region } })).statusCode).toBe(204);
+    // The rentrée came: free to change, then locked for the new year.
+    const was = t.clock.now().getTime();
+    t.clock.set(Date.parse('2027-10-02T08:00:00Z'));
+    // A year later: a fresh session (the first one has expired).
+    const { accessToken } = await t.c.modules.identity.startSession({ _id: new ObjectId(meNow.id), platformRoles: [] });
+    auth.authorization = `Bearer ${accessToken}`;
     expect((await t.app.inject({ method: 'PUT', url: '/api/v1/me/origin', headers: auth, payload: { ufr: 'SJP', region: 'Kolda' } })).statusCode).toBe(204);
-    expect(json(await t.app.inject({ url: '/api/v1/me', headers: auth })).student).toMatchObject({ ufr: 'SJP', region: 'Kolda' });
+    expect(json(await t.app.inject({ url: '/api/v1/me', headers: auth })).student).toMatchObject({ ufr: 'SJP', region: 'Kolda', originEditableFrom: '2028-10-01T00:00:00.000Z' });
+    expect((await t.app.inject({ method: 'PUT', url: '/api/v1/me/origin', headers: auth, payload: { ufr: 'SAT', region: 'Kolda' } })).statusCode).toBe(409);
+    t.clock.set(was);
   });
 
   it('applies the password rules of the app', async () => {

@@ -221,6 +221,8 @@ export class CommerceService {
       set.paymentMethods = methods;
     }
     await this.businesses.updateOne({ _id: b._id }, { $set: set });
+    // The previous photo leaves the storage once the new one is saved.
+    if (set.photo !== undefined && !(set.photo && b.photo && set.photo.mediaId.equals(b.photo.mediaId))) await this.media.release([b.photo?.mediaId]);
     return (await this.businesses.findOne({ _id: b._id }))!;
   }
 
@@ -267,6 +269,7 @@ export class CommerceService {
     if ((set.orderable ?? item.orderable) === false) set.stock = null;
     if (input.sortOrder !== undefined) set.sortOrder = input.sortOrder;
     await this.items.updateOne({ _id: itemId }, { $set: set });
+    if (set.photo !== undefined && !(set.photo && item.photo && set.photo.mediaId.equals(item.photo.mediaId))) await this.media.release([item.photo?.mediaId]);
     return (await this.items.findOne({ _id: itemId }))!;
   }
 

@@ -87,12 +87,14 @@ export class PlacesService {
     if (input.active !== undefined) set.active = input.active;
     if (input.sortOrder !== undefined) set.sortOrder = input.sortOrder;
     await this.places.updateOne({ _id: id }, { $set: set });
+    if (set.photos) await this.media.release(p.photos.filter((old) => old.mediaId && !set.photos!.some((n) => n.mediaId?.equals(old.mediaId!))).map((x) => x.mediaId));
     return this.get(id, true);
   }
 
   async remove(id: ObjectId) {
-    const res = await this.places.deleteOne({ _id: id });
-    if (!res.deletedCount) throw errors.notFound('Lieu introuvable.');
+    const p = await this.places.findOneAndDelete({ _id: id });
+    if (!p) throw errors.notFound('Lieu introuvable.');
+    await this.media.release(p.photos.map((x) => x.mediaId));
   }
 
   view(p: PlaceDoc) {

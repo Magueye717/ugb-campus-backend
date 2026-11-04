@@ -22,6 +22,8 @@ export const mediaCollections: CollectionSpec[] = [
     indexes: [
       { key: { key: 1 }, options: { name: 'key_unique', unique: true } },
       { key: { ownerId: 1, createdAt: -1 }, options: { name: 'owner_recent' } },
+      // The sweep: the oldest unchecked first.
+      { key: { checkedAt: 1, createdAt: 1 }, options: { name: 'sweep' } },
     ],
   },
 ];

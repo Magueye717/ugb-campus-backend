@@ -98,7 +98,7 @@ describe('a found student card', () => {
     expect((await ok(call(finder, 'GET', '/lost/cards/search?q=zzqx'))).items).toEqual([]);
     expect((await ok(call(finder, 'GET', `/lost/cards/lookup?number=${fatou.studentNumber.toLowerCase()}`))).owner.ref).toBe(fatou.userId);
     expect((await ok(call(finder, 'GET', '/lost/cards/lookup?number=P000001'))).owner).toBeNull();
-    expect((await call(finder, 'GET', '/lost/cards/lookup?number=12345')).statusCode).toBe(400);
+    expect((await call(finder, 'GET', '/lost/cards/lookup?number=12345678')).statusCode).toBe(400);
     // One's own card isn't "found".
     expect(json(await call(fatou, 'POST', '/lost/cards/found', { ownerRef: fatou.userId, where: 'BU', holder: 'office' })).code).toBe('LOST_OWN_CARD');
 
@@ -138,9 +138,12 @@ describe('my own student card', () => {
     // Without a scan of their own card: refused.
     expect(json(await put(other)).code).toBe('CARD_SCAN_REQUIRED');
     expect((await put(me)).statusCode).toBe(204);
-    // Saved once: locked.
-    expect(json(await put(me)).code).toBe('IDENTITY_LOCKED');
-    expect((await ok(call(me, 'GET', '/me'))).student.identity).toMatchObject({ birthDate: '2002-03-12', birthPlace: 'Saint-Louis', nationality: 'Sénégalaise', fromCard: true });
+    // Saved this year: a filled detail can't change before the next rentrée.
+    const change = await t.app.inject({ method: 'PUT', url: '/api/v1/me/identity', headers: bearer(me.tokens.accessToken), payload: { birthDate: '2002-03-12', birthPlace: 'Dakar', nationality: 'Sénégalaise', fromCard: true } });
+    expect(json(change).code).toBe('IDENTITY_LOCKED');
+    const mine = (await ok(call(me, 'GET', '/me'))).student;
+    expect(mine.identity).toMatchObject({ birthDate: '2002-03-12', birthPlace: 'Saint-Louis', nationality: 'Sénégalaise', fromCard: true });
+    expect(mine.identityEditableFrom).toBe('2027-10-01T00:00:00.000Z');
   });
 });
 

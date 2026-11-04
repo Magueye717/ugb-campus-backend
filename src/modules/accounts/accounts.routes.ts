@@ -8,7 +8,7 @@ import { IdParams, ObjectIdString, toObjectId } from '../../platform/http/schema
 import type { AuditApi } from '../audit/index.js';
 import type { AccountsService } from './accounts.service.js';
 import { CreateStaffUserBody, EmailBody, IdentityBody, LocationBody, MeResponse, NotificationPrefsSchema, OriginBody, PlatformRolesBody, ResidenceBody, StudentReference } from './accounts.schemas.js';
-import { CAMPUS_LABELS, CAMPUSES, REGIONS, UFRS, VILLAGES, type UserDoc } from './accounts.types.js';
+import { CAMPUS_LABELS, CAMPUSES, REGIONS, STUDENT_NUMBER_MAX, STUDENT_NUMBER_RE, UFRS, VILLAGES, type UserDoc } from './accounts.types.js';
 
 type Deps = {
   service: AccountsService;
@@ -16,10 +16,12 @@ type Deps = {
   requireStudent: preHandlerHookHandler;
   /** An upload (purpose avatar) becomes the user's: its stored reference. */
   claimImage: (userId: ObjectId, mediaId: string) => Promise<NonNullable<UserDoc['avatar']>>;
+  /** Deletes pictures nothing references any more (the media module). */
+  releaseImages: (mediaIds: (ObjectId | null)[]) => Promise<number>;
   requireAdmin: preHandlerHookHandler;
 };
 
-export function registerAccountsRoutes(root: FastifyInstance, { service, audit, requireStudent, requireAdmin, claimImage }: Deps) {
+export function registerAccountsRoutes(root: FastifyInstance, { service, audit, requireStudent, requireAdmin, claimImage, releaseImages }: Deps) {
   const app = root.withTypeProvider<TypeBoxTypeProvider>();
   const me = (req: Parameters<typeof actorOf>[0]) => toObjectId(actorOf(req).userId);
 
@@ -30,6 +32,8 @@ export function registerAccountsRoutes(root: FastifyInstance, { service, audit, 
     campuses: CAMPUSES.map((key) => ({ key, label: CAMPUS_LABELS[key], villages: VILLAGES[key] })),
     ufrs: UFRS.map((u) => ({ code: u.code, name: u.name })),
     regions: [...REGIONS],
+    // The sign-up form checks the same rule as the server.
+    studentNumber: { pattern: STUDENT_NUMBER_RE.source, maxLength: STUDENT_NUMBER_MAX, example: 'P232055' },
   }));
 
   // "Mon UFR et ma région": announcements for one UFR or region reach the student only once they're known.
@@ -68,7 +72,8 @@ export function registerAccountsRoutes(root: FastifyInstance, { service, audit, 
     '/me/avatar',
     { preHandler: requireAuth, config: perUser(20, '1 hour'), schema: { tags: ['me'], description: 'The profile picture: an upload (purpose avatar), or null to remove it.', body: Type.Object({ photoId: Type.Union([Type.Null(), ObjectIdString]) }, { additionalProperties: false }) } },
     async (req, reply) => {
-      await service.setAvatar(me(req), req.body.photoId ? await claimImage(me(req), req.body.photoId) : null);
+      const replaced = await service.setAvatar(me(req), req.body.photoId ? await claimImage(me(req), req.body.photoId) : null);
+      await releaseImages([replaced]);
       return reply.status(204).send();
     },
   );

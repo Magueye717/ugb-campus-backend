@@ -104,7 +104,7 @@ export class AccountsRepository {
     return (await this.profiles.find(filter, { projection: { userId: 1 } }).toArray()).map((p) => p.userId);
   }
 
-  updateProfile(userId: ObjectId, patch: Partial<Pick<StudentProfileDoc, 'campus' | 'onCampus' | 'village' | 'room' | 'ufr' | 'region' | 'identity' | 'cardReadAt'>>, now: Date) {
+  updateProfile(userId: ObjectId, patch: Partial<Pick<StudentProfileDoc, 'campus' | 'onCampus' | 'village' | 'room' | 'ufr' | 'region' | 'originSetAt' | 'identity' | 'cardReadAt'>>, now: Date) {
     return this.profiles.findOneAndUpdate({ userId }, { $set: { ...patch, updatedAt: now } }, { returnDocument: 'after' });
   }
 
