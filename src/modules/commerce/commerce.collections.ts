@@ -1,6 +1,6 @@
 import { bson, type CollectionSpec } from '../../platform/db/schema.js';
 import type { DataMigration } from '../../platform/db/migrations.js';
-import { BUSINESS_KINDS, DELIVERY_ZONES, ITEM_SECTIONS, MAX_SPECIALTIES, ORDER_MODES, ORDER_PAYMENT_METHODS, ORDER_STATUSES } from './commerce.types.js';
+import { BUSINESS_KINDS, DELIVERY_ZONES, ITEM_SECTIONS, MAX_ITEM_PHOTOS, MAX_SPECIALTIES, ORDER_MODES, ORDER_PAYMENT_METHODS, ORDER_STATUSES } from './commerce.types.js';
 
 const fee = bson.nullable(bson.int({ minimum: 0, maximum: 5000 }));
 
@@ -40,11 +40,12 @@ export const commerceCollections: CollectionSpec[] = [
           name: bson.string({ minLength: 2, maxLength: 50 }),
           detail: bson.string({ maxLength: 120 }),
           price: bson.int({ minimum: 0, maximum: 1_000_000 }),
+          photos: bson.array(bson.imageRef, { maxItems: MAX_ITEM_PHOTOS }),
           stock: bson.nullable(bson.int({ minimum: 0 })),
           available: bson.bool,
           orderable: bson.bool,
         },
-        ['businessId', 'section', 'category', 'name', 'detail', 'price', 'photo', 'stock', 'available', 'orderable', 'sortOrder', 'archivedAt', 'createdAt', 'updatedAt'],
+        ['businessId', 'section', 'category', 'name', 'detail', 'price', 'photos', 'stock', 'available', 'orderable', 'sortOrder', 'archivedAt', 'createdAt', 'updatedAt'],
       ),
     },
     indexes: [{ key: { businessId: 1, archivedAt: 1, sortOrder: 1 }, options: { name: 'catalog' } }],
@@ -112,6 +113,23 @@ export const commerceMigrations: DataMigration[] = [
         const one = typeof b.specialty === 'string' && b.specialty.trim() ? [b.specialty.trim()] : ['Autre'];
         await db.collection('businesses').updateOne({ _id: b._id }, { $set: { specialties: one }, $unset: { specialty: '' } });
       }
+    },
+  },
+  {
+    id: '2026-11-05-catalog-photos',
+    description: 'An article may have several photos (the cover first): its one photo becomes the first of `photos`.',
+    async up(db) {
+      await db.collection('catalogItems').updateMany({ photos: { $exists: false } }, [
+        { $set: { photos: { $cond: [{ $eq: [{ $ifNull: ['$photo', null] }, null] }, [], ['$photo']] } } },
+        { $unset: 'photo' },
+      ]);
+    },
+  },
+  {
+    id: '2026-11-05-student-shops-cash-only',
+    description: 'A student’s shop takes cash only until the team verifies it: Wave and Orange Money are taken off, cash stays.',
+    async up(db) {
+      await db.collection('businesses').updateMany({ byStudent: true, onlinePayments: { $exists: false } }, { $set: { onlinePayments: false, paymentMethods: ['cash'] } });
     },
   },
 ];

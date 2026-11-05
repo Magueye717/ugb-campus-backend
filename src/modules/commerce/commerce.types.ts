@@ -21,6 +21,9 @@ export type OrderPaymentMethod = (typeof ORDER_PAYMENT_METHODS)[number];
 export const ORDER_PAYMENT_LABELS: Record<OrderPaymentMethod, string> = { cash: 'Espèces', wave: 'Wave', orange_money: 'Orange Money' };
 /** A business's methods until its owner changes them: online only (cash is the owner's choice). */
 export const DEFAULT_PAYMENT_METHODS: OrderPaymentMethod[] = ['wave', 'orange_money'];
+/** Paid through Wave or Orange Money: only for a business the team has verified. */
+export const ONLINE_PAYMENT_METHODS: OrderPaymentMethod[] = ['wave', 'orange_money'];
+export const onlinePaymentsAllowed = (b: Pick<BusinessDoc, 'onlinePayments' | 'byStudent'>) => b.onlinePayments ?? !b.byStudent;
 
 /** A business has one to MAX_SPECIALTIES of these (shown joined: "Sénégalais · Grillades"). */
 export const MAX_SPECIALTIES = 4;
@@ -63,6 +66,11 @@ export type BusinessDoc = {
   active: boolean;
   /** A student's own shop (products or services they sell on campus). */
   byStudent?: boolean;
+  /**
+   * May take Wave and Orange Money. A student's shop starts with cash only, until the team has checked who runs it;
+   * missing: allowed for businesses the team created, not for students' (see `onlinePaymentsAllowed`).
+   */
+  onlinePayments?: boolean;
   /** The students' average rating of their orders (ratings module); missing until the first one. */
   rating?: { avg: number | null; count: number };
   createdAt: Date;
@@ -73,6 +81,9 @@ export type BusinessDoc = {
 export const ITEM_SECTIONS = ['menu', 'drink', 'article'] as const;
 export type ItemSection = (typeof ITEM_SECTIONS)[number];
 
+/** An article shown from several sides (a bag, a dress…): the cover and up to five more. */
+export const MAX_ITEM_PHOTOS = 6;
+
 export type CatalogItemDoc = {
   _id: ObjectId;
   businessId: ObjectId;
@@ -82,7 +93,8 @@ export type CatalogItemDoc = {
   name: string;
   detail: string;
   price: number;
-  photo: ImageRef | null;
+  /** In order: the first is the cover (cards, the basket, order lines). Up to MAX_ITEM_PHOTOS. */
+  photos: ImageRef[];
   /** Shops: units left (orders take them, refusals give them back); null: not counted. */
   stock: number | null;
   /** Shown and orderable today. */

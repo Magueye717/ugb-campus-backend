@@ -3,9 +3,10 @@ import type { FastifyInstance, FastifyRequest, preHandlerHookHandler } from 'fas
 import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
-import { IdParams, Nullable, toObjectId } from '../../platform/http/schemas.js';
+import { IdParams, Nullable, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
 import { CAMPUSES, REGIONS, UFR_CODES, type AudienceProfile } from '../accounts/index.js';
 import type { AuditApi } from '../audit/index.js';
+import type { MediaApi } from '../media/index.js';
 import { alertView, type AlertsService, type Editor } from './alerts.service.js';
 import { ALERT_PLACEMENTS, ALERT_TONES, type AlertInput } from './alerts.types.js';
 
@@ -17,6 +18,9 @@ export const AlertView = Type.Object({
   tag: Nullable(Type.String({ description: '"À la une" label: Élections, Bourses…' })),
   title: Type.String(),
   body: Type.String(),
+  details: Type.String({ description: 'The whole text, on the announcement’s page ("" when none).' }),
+  image: Nullable(Type.String({ description: 'A picture (poster, timetable), on its page.' })),
+  attachment: Nullable(Type.Object({ url: Type.String(), name: Type.String(), bytes: Type.Number() }, { description: 'A PDF to open or download.' })),
   icon: Type.String({ description: 'Ionicons name.' }),
   tone: Type.String({ description: 'info | warning | danger (urgent, shown in red) | success' }),
   href: Nullable(Type.String({ description: 'App route opened on tap; null: display only.' })),
@@ -42,6 +46,9 @@ const Fields = {
   tag: Type.Optional(Nullable(Type.String({ minLength: 2, maxLength: 24, description: 'Required for headline: "Élections", "Bourses".' }))),
   title: Type.String({ minLength: 3, maxLength: 80, description: '"Élections des délégués"' }),
   body: Type.String({ maxLength: 200, description: '"Vote jeudi 06 nov. · 8h-17h · salle polyvalente"' }),
+  details: Type.Optional(Type.String({ maxLength: 3000, description: 'The whole text, on its page. Default "".' })),
+  imageId: Type.Optional(Nullable(ObjectIdString)),
+  attachmentId: Type.Optional(Nullable(ObjectIdString)),
   icon: Type.Optional(Type.String({ maxLength: 40, description: 'Ionicons name. Default megaphone-outline (headline) / warning-outline (banner).' })),
   tone: Type.Optional(Type.Enum(ALERT_TONES, { description: 'Default info (headline) / warning (banner).' })),
   href: Type.Optional(Nullable(Type.String({ maxLength: 200, pattern: '^/', description: 'App route opened on tap.' }))),
@@ -63,13 +70,14 @@ const Fields = {
 
 type Deps = {
   service: AlertsService;
+  media: Pick<MediaApi, 'claim' | 'claimDocument'>;
   audit: AuditApi;
   requireEditor: preHandlerHookHandler;
   rolesOf: (userId: string) => Promise<readonly string[]>;
   audienceOf: (userId: string) => Promise<AudienceProfile>;
 };
 
-export function registerAlertsRoutes(root: FastifyInstance, { service, audit, requireEditor, rolesOf, audienceOf }: Deps) {
+export function registerAlertsRoutes(root: FastifyInstance, { service, audit, requireEditor, rolesOf, audienceOf, media }: Deps) {
   const app = root.withTypeProvider<TypeBoxTypeProvider>();
   const tags = ['alerts'];
   const editor = { preHandler: [requireAuth, requireEditor] };
@@ -83,6 +91,7 @@ export function registerAlertsRoutes(root: FastifyInstance, { service, audit, re
       tag: ((b.tag as string | null | undefined) ?? null)?.trim() || null,
       title: (b.title as string).trim(),
       body: (b.body as string).trim(),
+      details: ((b.details as string | undefined) ?? '').trim(),
       icon: (b.icon as string | undefined) ?? (placement === 'headline' ? 'megaphone-outline' : 'warning-outline'),
       tone: (b.tone as AlertInput['tone'] | undefined) ?? (placement === 'headline' ? 'info' : 'warning'),
       href: (b.href as string | null | undefined) ?? null,
@@ -93,6 +102,17 @@ export function registerAlertsRoutes(root: FastifyInstance, { service, audit, re
       push: !!b.push,
     };
   };
+
+  /** The picture and the PDF sent with it, the editor's own uploads. Undefined: not sent (an update keeps them). */
+  const files = async (b: { imageId?: string | null; attachmentId?: string | null }, e: Editor) => ({
+    ...(b.imageId !== undefined ? { image: b.imageId ? (await media.claim(e.userId, [b.imageId]))[0]! : null } : {}),
+    ...(b.attachmentId !== undefined ? { attachment: b.attachmentId ? await media.claimDocument(e.userId, b.attachmentId) : null } : {}),
+  });
+
+  // An announcement's page (from "À la une" or a push): only one this student sees now.
+  app.get('/alerts/:id', { preHandler: requireAuth, schema: { tags, params: IdParams, response: { 200: AlertView } } }, async (req) =>
+    alertView(await service.one(toObjectId(req.params.id), await audienceOf(actorOf(req).userId), toObjectId(actorOf(req).userId))),
+  );
 
   // The home screen: the strip and "À la une", what's for this student (their campus, UFR, region) or for everyone.
   app.get('/alerts', { preHandler: requireAuth, schema: { tags, response: { 200: Type.Object({ items: Type.Array(AlertView) }) } } }, async (req) => ({
@@ -120,7 +140,7 @@ export function registerAlertsRoutes(root: FastifyInstance, { service, audit, re
     async (req, reply) => {
       const e = await who(req);
       const kind = req.body.kind ?? (e.roles.includes('admin') || e.roles.includes('content_editor') ? 'campus' : 'academic');
-      const doc = await service.create({ kind, ...input(req.body, service.now()) }, e);
+      const doc = await service.create({ kind, ...input(req.body, service.now()), ...(await files(req.body, e)) }, e);
       await trace(req, 'alert.create', doc._id.toHexString(), { placement: doc.placement, push: doc.push });
       return reply.status(201).send(service.adminView(doc, e));
     },
@@ -131,7 +151,7 @@ export function registerAlertsRoutes(root: FastifyInstance, { service, audit, re
     { ...editor, schema: { tags, params: IdParams, body: Type.Object(Fields, { additionalProperties: false }), response: { 200: AdminAlertView } } },
     async (req) => {
       const e = await who(req);
-      const doc = await service.update(toObjectId(req.params.id), input(req.body, service.now()), e);
+      const doc = await service.update(toObjectId(req.params.id), { ...input(req.body, service.now()), ...(await files(req.body, e)) }, e);
       await trace(req, 'alert.update', req.params.id);
       return service.adminView(doc, e);
     },

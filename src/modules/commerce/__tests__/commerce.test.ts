@@ -2,6 +2,7 @@ import { ObjectId } from 'mongodb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { bearer, createStaff, createTestApp, json, nextPhone, nextStudentNumber, registerStudent, T0, type TestApp } from '../../../../test/harness.js';
+import { picture } from '../../../../test/upload.js';
 
 let t: TestApp;
 beforeAll(async () => {
@@ -463,3 +464,66 @@ describe('student shops', () => {
     expect((await call(staff, 'POST', '/me/shop', { name: 'Pas étudiant', specialties: ['Services'] })).statusCode).toBe(403);
   });
 });
+
+describe('article photos', () => {
+  it('an article has several photos, the cover first; dropped ones leave the storage; older apps still send one', async () => {
+    const { owner, orgId, sp } = await business('shop');
+    const ownerId = new ObjectId(String(owner.userId));
+    const upload = async () => (await t.c.modules.media.service.upload(ownerId, 'business', await picture(), 'http://localhost/api/v1'))._id.toHexString();
+    const [a, b2, c] = [await upload(), await upload(), await upload()];
+
+    const bag = await ok(call(owner, 'POST', `/org/${orgId}/${sp}/catalog`, { section: 'article', name: 'Sac à dos', price: 9000, photoIds: [a, b2, c] }), 201);
+    expect(bag.photoIds).toEqual([a, b2, c]);
+    expect(bag.photos).toHaveLength(3);
+    expect(bag.photo).toBe(bag.photos[0]);
+
+    // c becomes the cover, b2 is dropped: its file goes.
+    const edited = await ok(call(owner, 'PATCH', `/org/${orgId}/${sp}/catalog/${bag.id}`, { photoIds: [c, a] }));
+    expect(edited.photoIds).toEqual([c, a]);
+    expect(edited.photo).toBe(bag.photos[2]);
+    expect(await t.c.mongo.db.collection('media').countDocuments({ _id: new ObjectId(b2) })).toBe(0);
+    expect(await t.c.mongo.db.collection('media').countDocuments({ _id: new ObjectId(a) })).toBe(1);
+
+    const seven = await Promise.all(Array.from({ length: 7 }, () => upload()));
+    expect((await call(owner, 'PATCH', `/org/${orgId}/${sp}/catalog/${bag.id}`, { photoIds: seven })).statusCode).toBe(400);
+    const stranger = await registerStudent(t);
+    const theirs = (await t.c.modules.media.service.upload(new ObjectId(stranger.userId), 'business', await picture(), 'http://localhost/api/v1'))._id.toHexString();
+    expect((await call(owner, 'PATCH', `/org/${orgId}/${sp}/catalog/${bag.id}`, { photoIds: [theirs] })).statusCode).toBe(400);
+
+    // An older app: one picture.
+    const one = await ok(call(owner, 'PATCH', `/org/${orgId}/${sp}/catalog/${bag.id}`, { photoId: a }));
+    expect(one.photoIds).toEqual([a]);
+    expect((await ok(call(owner, 'PATCH', `/org/${orgId}/${sp}/catalog/${bag.id}`, { photoId: null }))).photos).toEqual([]);
+  });
+});
+
+describe('student shops and owners', () => {
+  it('a student shop takes cash only until the team verifies it', async () => {
+    const s = await registerStudent(t);
+    const shop = await ok(call(s, 'POST', '/me/shop', { name: 'Tresses de Awa', specialties: ['Services'] }), 201);
+    expect(shop).toMatchObject({ onlinePayments: false, paymentMethods: [{ value: 'cash', label: 'Espèces' }] });
+    expect(json(await call(s, 'PATCH', `/org/${shop.orgId}/shop/business`, { paymentMethods: ['cash', 'wave'] }))).toMatchObject({ code: 'ONLINE_PAYMENTS_LOCKED' });
+
+    // Verified by the team: Wave and Orange Money open; closed again, they go and cash stays.
+    const admin = await createStaff(t, ['admin']);
+    expect((await ok(call(admin, 'PATCH', `/admin/businesses/${shop.id}`, { onlinePayments: true }))).onlinePayments).toBe(true);
+    const paid = await ok(call(s, 'PATCH', `/org/${shop.orgId}/shop/business`, { paymentMethods: ['wave'] }));
+    expect(paid.paymentMethods).toEqual([{ value: 'wave', label: 'Wave' }]);
+    const closed = await ok(call(admin, 'PATCH', `/admin/businesses/${shop.id}`, { onlinePayments: false }));
+    expect(closed).toMatchObject({ onlinePayments: false, paymentMethods: [{ value: 'cash', label: 'Espèces' }] });
+  });
+
+  it('an owner sees their own business as editable and cannot order from it', async () => {
+    const { b, owner, orgId, sp } = await business('restaurant', { paymentMethods: ['cash'] });
+    const mafe = await ok(call(owner, 'POST', `/org/${orgId}/${sp}/catalog`, { section: 'menu', name: 'Mafé yap', price: 1500 }), 201);
+    expect((await ok(call(owner, 'GET', `/businesses/${b.id}`))).viewer).toEqual({ member: true, canEdit: true });
+    const refused = await call(owner, 'POST', `/businesses/${b.id}/orders`, { lines: [{ itemId: mafe.id, qty: 1 }], mode: 'pickup', method: 'cash' });
+    expect(refused.statusCode).toBe(422);
+    expect(json(refused).code).toBe('OWN_BUSINESS');
+
+    const s = await registerStudent(t);
+    expect((await ok(call(s, 'GET', `/businesses/${b.id}`))).viewer).toEqual({ member: false, canEdit: false });
+    await ok(call(s, 'POST', `/businesses/${b.id}/orders`, { lines: [{ itemId: mafe.id, qty: 1 }], mode: 'pickup', method: 'cash' }), 201);
+  });
+});
+

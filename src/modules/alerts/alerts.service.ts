@@ -3,6 +3,7 @@ import { ObjectId, type Collection, type Db } from 'mongodb';
 import type { Clock } from '../../platform/clock.js';
 import { errors } from '../../platform/http/errors.js';
 import type { Audience, AudienceProfile } from '../accounts/index.js';
+import type { MediaApi } from '../media/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
 import type { AlertDoc, AlertInput, AlertKind, AlertStatus, AlertTone, RaisedAlert } from './alerts.types.js';
 
@@ -35,6 +36,9 @@ export const alertView = (a: AlertDoc) => ({
   tag: a.tag,
   title: a.title,
   body: a.body,
+  details: a.details ?? '',
+  image: a.image?.url ?? null,
+  attachment: a.attachment ? { url: a.attachment.url, name: a.attachment.name, bytes: a.attachment.bytes } : null,
   icon: a.icon,
   tone: a.tone,
   href: a.href,
@@ -51,6 +55,7 @@ export class AlertsService {
     db: Db,
     private readonly clock: Clock,
     private readonly notifications: NotificationsApi,
+    private readonly media: Pick<MediaApi, 'release'>,
   ) {
     this.alerts = db.collection('alerts');
   }
@@ -88,6 +93,13 @@ export class AlertsService {
     return list.filter((a) => isFor(a.audience, viewer)).slice(0, 50).sort((a, b) => TONE_ORDER[a.tone] - TONE_ORDER[b.tone]);
   }
 
+  /** One alert, for its page: only if this viewer sees it on their home screen now. */
+  async one(id: ObjectId, viewer: AudienceProfile, viewerId: ObjectId) {
+    const a = (await this.active(viewer, viewerId)).find((x) => x._id.equals(id));
+    if (!a) throw errors.notFound('Cette annonce n’est plus en ligne.');
+    return a;
+  }
+
   /** Back office: scheduled, live and recently ended or withdrawn alerts, newest first. */
   recent() {
     return this.alerts.find({ endsAt: { $gt: new Date(this.clock.now().getTime() - 14 * 24 * 3_600_000) }, forUserId: null }).sort({ startsAt: -1 }).limit(200).toArray();
@@ -97,7 +109,7 @@ export class AlertsService {
     if (!canEdit(editor, input.kind)) throw errors.forbidden('Tu ne peux publier que les annonces de ton équipe.');
     this.check(input);
     const now = this.clock.now();
-    const doc: AlertDoc = { _id: new ObjectId(), ...input, sourceKey: null, pushedAt: null, withdrawnAt: null, createdBy: editor.userId, updatedBy: editor.userId, createdAt: now, updatedAt: now };
+    const doc: AlertDoc = { _id: new ObjectId(), ...input, details: input.details ?? '', image: input.image ?? null, attachment: input.attachment ?? null, sourceKey: null, pushedAt: null, withdrawnAt: null, createdBy: editor.userId, updatedBy: editor.userId, createdAt: now, updatedAt: now };
     await this.alerts.insertOne(doc);
     await this.pushIfDue(doc);
     return (await this.alerts.findOne({ _id: doc._id }))!;
@@ -115,7 +127,12 @@ export class AlertsService {
     const startsAt = status === 'live' ? a.startsAt : input.startsAt;
     this.check({ ...input, startsAt });
     const now = this.clock.now();
-    const updated = (await this.alerts.findOneAndUpdate({ _id: id }, { $set: { ...input, startsAt, updatedBy: editor.userId, updatedAt: now } }, { returnDocument: 'after' }))!;
+    const { image, attachment, ...rest } = input;
+    const set = { ...rest, ...(image !== undefined ? { image } : {}), ...(attachment !== undefined ? { attachment } : {}), startsAt, updatedBy: editor.userId, updatedAt: now };
+    const updated = (await this.alerts.findOneAndUpdate({ _id: id }, { $set: set }, { returnDocument: 'after' }))!;
+    // A picture or a PDF replaced or removed: the old file leaves the storage.
+    const dropped = (next: { mediaId: ObjectId } | null | undefined, old: { mediaId: ObjectId } | null | undefined) => (next !== undefined && old && !next?.mediaId.equals(old.mediaId) ? old.mediaId : null);
+    await this.media.release([dropped(image, a.image), dropped(attachment, a.attachment)]);
     await this.pushIfDue(updated);
     return (await this.alerts.findOne({ _id: id }))!;
   }

@@ -1,6 +1,8 @@
 import type { ObjectId } from 'mongodb';
 
+import type { ImageRef } from '../../platform/media.js';
 import type { Audience } from '../accounts/index.js';
+import type { FileRef } from '../media/index.js';
 
 export const ALERT_TONES = ['info', 'warning', 'danger', 'success'] as const;
 export type AlertTone = (typeof ALERT_TONES)[number];
@@ -35,6 +37,11 @@ export type AlertDoc = {
   tag: string | null;
   title: string;
   body: string;
+  /** The whole text, on its own page (the body is the summary on the home screen). Missing: none. */
+  details?: string;
+  /** A picture (a poster, a timetable) and a PDF (the full notice, a form), on its page. Missing: none. */
+  image?: ImageRef | null;
+  attachment?: FileRef | null;
   /** Ionicons name (from an allowlist in the app). */
   icon: string;
   tone: AlertTone;
@@ -69,6 +76,11 @@ export type AlertInput = {
   tag: string | null;
   title: string;
   body: string;
+  /** Default "". */
+  details?: string;
+  /** Undefined: unchanged (an update that doesn't touch them); null: removed. */
+  image?: ImageRef | null;
+  attachment?: FileRef | null;
   icon: string;
   tone: AlertTone;
   href: string | null;

@@ -12,18 +12,18 @@ import { toObjectId } from '../../platform/http/schemas.js';
 import type { Limiter } from '../../platform/security/limiter.js';
 import { mediaCollections } from './media.collections.js';
 import { MediaService } from './media.service.js';
-import { createMediaStorage, LocalMediaStorage } from './media.storage.js';
+import { contentTypeOf, createMediaStorage, LocalMediaStorage } from './media.storage.js';
 import { MEDIA_PURPOSES } from './media.types.js';
 
 export { mediaCollections };
-export type { MediaUsage } from './media.types.js';
+export type { FileRef, MediaUsage } from './media.types.js';
 
 export const MEDIA_SWEEP_QUEUE = 'media.sweep';
 
 /** Uploaded files above this are refused before being read. */
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
-export type MediaApi = Pick<MediaService, 'claim' | 'release' | 'trackUsage'> & {
+export type MediaApi = Pick<MediaService, 'claim' | 'claimDocument' | 'release' | 'trackUsage'> & {
   registerRoutes(app: FastifyInstance): Promise<void>;
   processors(): Record<string, () => Promise<unknown>>;
   schedules: { queue: string; everyMs: number }[];
@@ -59,7 +59,30 @@ export function createMediaModule(d: { db: Db; clock: Clock; config: Config; lim
           throw errors.validation('Image trop lourde : 10 Mo au plus.', { field: 'file' });
         });
         const doc = await service.upload(toObjectId(actorOf(req).userId), req.query.purpose, buf, apiBase(req));
-        return reply.status(201).send({ id: doc._id.toHexString(), url: doc.url, width: doc.width, height: doc.height });
+        return reply.status(201).send({ id: doc._id.toHexString(), url: doc.url, width: doc.width!, height: doc.height! });
+      },
+    );
+
+    app.post(
+      '/media/files',
+      {
+        preHandler: requireAuth,
+        schema: {
+          tags: ['media'],
+          consumes: ['multipart/form-data'],
+          description: 'Upload one PDF (field `file`, up to 10 MB), for an announcement (purpose alert). Kept as sent; attach it by `id` (`attachmentId`).',
+          querystring: Type.Object({ purpose: Type.Enum(MEDIA_PURPOSES) }, { additionalProperties: false }),
+          response: { 201: Type.Object({ id: Type.String(), url: Type.String(), name: Type.String(), bytes: Type.Number() }) },
+        },
+      },
+      async (req, reply) => {
+        const file = await req.file();
+        if (!file) throw errors.validation('Ajoute un fichier.', { field: 'file' });
+        const buf = await file.toBuffer().catch(() => {
+          throw errors.validation('Fichier trop lourd : 10 Mo au plus.', { field: 'file' });
+        });
+        const doc = await service.uploadDocument(toObjectId(actorOf(req).userId), req.query.purpose, buf, file.filename, apiBase(req));
+        return reply.status(201).send({ id: doc._id.toHexString(), url: doc.url, name: doc.name!, bytes: doc.bytes });
       },
     );
 
@@ -68,13 +91,15 @@ export function createMediaModule(d: { db: Db; clock: Clock; config: Config; lim
       app.get('/media/*', { schema: { hide: true } }, async (req, reply) => {
         const body = await storage.read((req.params as { '*': string })['*']);
         if (!body) throw errors.notFound();
-        return reply.header('content-type', 'image/webp').header('cache-control', 'public, max-age=31536000, immutable').send(body);
+        const key = (req.params as { '*': string })['*'];
+        return reply.header('content-type', contentTypeOf(key)).header('cache-control', 'public, max-age=31536000, immutable').send(body);
       });
     }
   };
 
   return {
     claim: (o, ids) => service.claim(o, ids),
+    claimDocument: (o, id) => service.claimDocument(o, id),
     release: (ids) => service.release(ids),
     trackUsage: (u) => service.trackUsage(u),
     registerRoutes,

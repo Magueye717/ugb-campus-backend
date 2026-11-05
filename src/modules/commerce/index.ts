@@ -28,7 +28,7 @@ export type CommerceApi = {
 /** Restaurant and shop photos, product photos. The media module deletes a picture once none of these reference it. */
 export const COMMERCE_MEDIA_USAGE: MediaUsage[] = [
   { collection: 'businesses', path: 'photo.mediaId' },
-  { collection: 'catalogItems', path: 'photo.mediaId' },
+  { collection: 'catalogItems', path: 'photos.mediaId' },
 ];
 
 export function createCommerceModule(d: {

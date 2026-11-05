@@ -14,7 +14,9 @@ export interface MediaStorage {
   url(key: string, apiBase: string): string;
 }
 
-const KEY_RE = /^[a-z]+\/\d{4}\/\d{2}\/[a-f0-9]{24}\.webp$/;
+const KEY_RE = /^[a-z]+\/\d{4}\/\d{2}\/[a-f0-9]{24}\.(webp|pdf)$/;
+/** The type a stored key is served with. */
+export const contentTypeOf = (key: string) => (key.endsWith('.pdf') ? 'application/pdf' : 'image/webp');
 export const isMediaKey = (key: string) => KEY_RE.test(key);
 
 /** Development: files under MEDIA_DIR, served by the API on /media/<key>. */

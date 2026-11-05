@@ -6,7 +6,7 @@ import { errors } from '../../platform/http/errors.js';
 import type { ImageRef } from '../../platform/media.js';
 import type { Limiter } from '../../platform/security/limiter.js';
 import type { MediaStorage } from './media.storage.js';
-import type { MediaDoc, MediaPurpose, MediaUsage } from './media.types.js';
+import type { FileRef, MediaDoc, MediaPurpose, MediaUsage } from './media.types.js';
 
 /** Longest side after re-encoding: sharp on a phone, light on mobile data. */
 const MAX_SIDE = 1600;
@@ -18,6 +18,13 @@ const UNATTACHED_GRACE_MS = 24 * 3600_000;
 /** A picture found in use is checked again this much later (its entity may have been deleted since). */
 const RECHECK_MS = 7 * 24 * 3600_000;
 const SWEEP_BATCH = 200;
+/** Who may attach a document, and to what: announcements only. */
+export const DOCUMENT_PURPOSES: MediaPurpose[] = ['alert'];
+/** "Calendrier des examens.pdf": no path, no control characters, one line, a sane length. */
+const cleanName = (raw: string | undefined) => {
+  const base = (raw ?? '').split(/[\\/]/).pop()!.split('').filter((c) => c.charCodeAt(0) > 31 && c.charCodeAt(0) !== 127).join('').trim().slice(0, 100);
+  return base ? (base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`) : 'document.pdf';
+};
 
 export class MediaService {
   private readonly media: Collection<MediaDoc>;
@@ -61,13 +68,37 @@ export class MediaService {
   }
 
   /**
+   * A PDF (an announcement's timetable, a form): checked to be one (by its first bytes, not its name), kept as sent.
+   * Images go through `upload`.
+   */
+  async uploadDocument(ownerId: ObjectId, purpose: MediaPurpose, input: Buffer, fileName: string | undefined, apiBase: string): Promise<MediaDoc> {
+    if (!DOCUMENT_PURPOSES.includes(purpose)) throw errors.validation('Document non accepté ici.', { field: 'purpose' });
+    await this.limiter.hit(`media-upload:${ownerId.toHexString()}`, { limit: 40, windowS: 3600 }, 'Trop de fichiers envoyés. Réessaie dans une heure.');
+    if (input.subarray(0, 5).toString('latin1') !== '%PDF-') throw errors.validation('Ce fichier n’est pas un PDF.', { field: 'file' });
+    const now = this.clock.now();
+    const _id = new ObjectId();
+    const key = `${purpose}/${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}/${_id.toHexString()}.pdf`;
+    await this.storage.put(key, input, 'application/pdf');
+    const doc: MediaDoc = { _id, ownerId, purpose, key, url: this.storage.url(key, apiBase), contentType: 'application/pdf', name: cleanName(fileName), bytes: input.length, createdAt: now };
+    await this.media.insertOne(doc);
+    return doc;
+  }
+
+  /** A document the user sent (`uploadDocument`), to attach. Another person's, an image or a made-up id: refused. */
+  async claimDocument(ownerId: ObjectId, id: string): Promise<FileRef> {
+    const m = ObjectId.isValid(id) ? await this.media.findOne({ _id: new ObjectId(id), ownerId, contentType: 'application/pdf' }) : null;
+    if (!m) throw errors.validation('Document inconnu : envoie-le d’abord.', { field: 'attachmentId' });
+    return { mediaId: m._id, url: m.url, name: m.name ?? 'document.pdf', bytes: m.bytes };
+  }
+
+  /**
    * The pictures a user attaches to their banner or event: theirs, in the given order. Anything else (another
-   * person's upload, a made-up id) is refused.
+   * person's upload, a document, a made-up id) is refused.
    */
   async claim(ownerId: ObjectId, ids: string[]): Promise<ImageRef[]> {
     const oids = ids.map((id) => (ObjectId.isValid(id) ? new ObjectId(id) : null));
     if (oids.some((x) => !x)) throw errors.validation('Image inconnue.', { field: 'images' });
-    const found = await this.media.find({ _id: { $in: oids as ObjectId[] }, ownerId }).toArray();
+    const found = await this.media.find({ _id: { $in: oids as ObjectId[] }, ownerId, contentType: 'image/webp' }).toArray();
     return (oids as ObjectId[]).map((id) => {
       const m = found.find((f) => f._id.equals(id));
       if (!m) throw errors.validation('Image inconnue : envoie-la d’abord.', { field: 'images' });

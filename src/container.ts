@@ -2,7 +2,7 @@ import type { Redis } from 'ioredis';
 
 import type { Config } from './config/env.js';
 import { ACCOUNTS_MEDIA_USAGE, createAccountsModule, type AccountsApi } from './modules/accounts/index.js';
-import { createAlertsModule, type AlertsApi } from './modules/alerts/index.js';
+import { ALERTS_MEDIA_USAGE, createAlertsModule, type AlertsApi } from './modules/alerts/index.js';
 import { createMediaModule, type MediaApi } from './modules/media/index.js';
 import { createEventsModule, EVENTS_MEDIA_USAGE, type EventsApi } from './modules/events/index.js';
 import { BANNERS_MEDIA_USAGE, createBannersModule, type BannersApi } from './modules/banners/index.js';
@@ -70,7 +70,7 @@ export async function createContainer(config: Config, opts: { clock?: Clock; war
   const media = (late.media = createMediaModule({ db: mongo.db, clock, config, limiter }));
   const events = createEventsModule({ db: mongo.db, mongo: mongo.client, clock, accounts, organizations, payments, ticketing, media, limiter, audit, notifications });
   const banners = createBannersModule({ db: mongo.db, mongo: mongo.client, clock, payments, media, events, organizations, limiter, audit, notifications });
-  const alerts = createAlertsModule({ db: mongo.db, clock, audit, notifications, accounts });
+  const alerts = createAlertsModule({ db: mongo.db, clock, audit, notifications, accounts, media });
   const publicRestos = createPublicRestosModule({ db: mongo.db, clock, audit, alerts, notifications });
   const commerce = createCommerceModule({ db: mongo.db, mongo: mongo.client, clock, accounts, organizations, payments, media, notifications, limiter, audit });
   const places = createPlacesModule({ db: mongo.db, clock, media, audit });
@@ -82,7 +82,7 @@ export async function createContainer(config: Config, opts: { clock?: Clock; war
     db: mongo.db, mongo: mongo.client, clock, accounts, messaging, notifications, alerts, media, limiter, audit, reader: opts.cardReader ?? new TesseractCardReader(config.OCR_CACHE_DIR),
   });
   // Where pictures are kept: one that none of these reference any more is deleted from the storage.
-  media.trackUsage([...ACCOUNTS_MEDIA_USAGE, ...ORGANIZATIONS_MEDIA_USAGE, ...COMMERCE_MEDIA_USAGE, ...BANNERS_MEDIA_USAGE, ...EVENTS_MEDIA_USAGE, ...PLACES_MEDIA_USAGE, ...LOST_MEDIA_USAGE]);
+  media.trackUsage([...ACCOUNTS_MEDIA_USAGE, ...ORGANIZATIONS_MEDIA_USAGE, ...COMMERCE_MEDIA_USAGE, ...BANNERS_MEDIA_USAGE, ...EVENTS_MEDIA_USAGE, ...PLACES_MEDIA_USAGE, ...LOST_MEDIA_USAGE, ...ALERTS_MEDIA_USAGE]);
 
   return {
     config,

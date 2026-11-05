@@ -11,7 +11,7 @@ import type { AuditApi } from '../audit/index.js';
 import type { OrganizationsApi, OrgRole } from '../organizations/index.js';
 import { PaymentView, paymentView } from '../payments/index.js';
 import type { BusinessRef, CommerceService } from './commerce.service.js';
-import { BUSINESS_KINDS, DELIVERY_ZONE_LABELS, DELIVERY_ZONES, ITEM_SECTIONS, MAX_SPECIALTIES, ORDER_MODES, ORDER_PAYMENT_LABELS, ORDER_PAYMENT_METHODS, SPECIALTIES, type BusinessDoc, type BusinessKind } from './commerce.types.js';
+import { BUSINESS_KINDS, DELIVERY_ZONE_LABELS, DELIVERY_ZONES, ITEM_SECTIONS, MAX_ITEM_PHOTOS, MAX_SPECIALTIES, ORDER_MODES, ORDER_PAYMENT_LABELS, ORDER_PAYMENT_METHODS, SPECIALTIES, type BusinessDoc, type BusinessKind } from './commerce.types.js';
 
 // Null first: the validator would otherwise coerce null to 0 ("free delivery") through the integer branch.
 const Fee = Nullable(Type.Integer({ minimum: 0, maximum: 5000 }));
@@ -26,8 +26,9 @@ const ItemView = Type.Object({
   name: Type.String(),
   detail: Type.String(),
   price: Type.Number(),
-  photo: Nullable(Type.String()),
-  photoId: Nullable(Type.String()),
+  photo: Nullable(Type.String({ description: 'The cover: the first of `photos`.' })),
+  photos: Type.Array(Type.String(), { description: 'Every picture, the cover first.' }),
+  photoIds: Type.Array(Type.String(), { description: 'The same pictures, to send back in `photoIds` when editing.' }),
   stock: Nullable(Type.Number({ description: 'Shops: units left; null: not counted.' })),
   soldOut: Type.Boolean(),
   available: Type.Boolean(),
@@ -59,9 +60,17 @@ const BusinessView = Type.Object({
   paymentMethods: Type.Array(Type.Object({ value: Type.String(), label: Type.String() }), { description: 'How students may pay: cash (at delivery or the counter), wave, orange_money.' }),
   active: Type.Boolean(),
   byStudent: Type.Boolean({ description: 'A student’s own shop.' }),
+  onlinePayments: Type.Boolean({ description: 'May take Wave and Orange Money. A student’s shop: false until the team has verified it (cash only).' }),
 });
 const ListedBusiness = Type.Object({ ...BusinessView.properties, highlights: Type.Array(ItemView), minPrice: Nullable(Type.Number()), itemsCount: Type.Number(), itemNames: Type.Array(Type.String(), { description: 'Every available item: for searching.' }) });
-const BusinessDetail = Type.Object({ ...BusinessView.properties, items: Type.Array(ItemView) });
+const BusinessDetail = Type.Object({
+  ...BusinessView.properties,
+  items: Type.Array(ItemView),
+  viewer: Type.Object(
+    { member: Type.Boolean({ description: 'Its owner or team: they cannot order here.' }), canEdit: Type.Boolean({ description: 'Owner or manager: may edit the catalog (/org/:orgId/:space/catalog).' }) },
+    { description: 'The caller, for this business.' },
+  ),
+});
 const OrderView = Type.Object({
   id: Type.String(),
   code: Type.String({ description: 'Said at the counter: "C7KQ2M".' }),
@@ -108,6 +117,8 @@ const ItemFields = {
   name: Type.String({ minLength: 2, maxLength: 50 }),
   detail: Type.Optional(Type.String({ maxLength: 120 })),
   price: Type.Integer({ minimum: 0, maximum: 1_000_000 }),
+  photoIds: Type.Optional(Type.Array(ObjectIdString, { maxItems: MAX_ITEM_PHOTOS, description: `Uploads (purpose business), the cover first; up to ${MAX_ITEM_PHOTOS}. [] removes them all.` })),
+  // Older apps: one picture (same as photoIds: [id], or [] for null).
   photoId: Type.Optional(Nullable(ObjectIdString)),
   stock: Type.Optional(Nullable(Type.Integer({ minimum: 0, maximum: 100_000 }))),
   available: Type.Optional(Type.Boolean()),
@@ -144,8 +155,8 @@ export function registerCommerceRoutes(root: FastifyInstance, { service, audit, 
   // The lists the app's pickers show (specialties, delivery zones): one source, here.
   app.get(
     '/reference/commerce',
-    { schema: { tags, response: { 200: Type.Object({ specialties: Type.Object({ restaurant: Type.Array(Type.String()), shop: Type.Array(Type.String()) }), maxSpecialties: Type.Integer(), paymentMethods: Type.Array(Type.Object({ value: Type.String(), label: Type.String() })), zones: Type.Array(Type.Object({ value: Type.String(), label: Type.String() })) }) } } },
-    async () => ({ specialties: { restaurant: [...SPECIALTIES.restaurant], shop: [...SPECIALTIES.shop] }, maxSpecialties: MAX_SPECIALTIES, paymentMethods: ORDER_PAYMENT_METHODS.map((m) => ({ value: m, label: ORDER_PAYMENT_LABELS[m] })), zones: DELIVERY_ZONES.map((z) => ({ value: z, label: DELIVERY_ZONE_LABELS[z] })) }),
+    { schema: { tags, response: { 200: Type.Object({ specialties: Type.Object({ restaurant: Type.Array(Type.String()), shop: Type.Array(Type.String()) }), maxSpecialties: Type.Integer(), maxItemPhotos: Type.Integer({ description: 'Photos per article, the cover included.' }), paymentMethods: Type.Array(Type.Object({ value: Type.String(), label: Type.String() })), zones: Type.Array(Type.Object({ value: Type.String(), label: Type.String() })) }) } } },
+    async () => ({ specialties: { restaurant: [...SPECIALTIES.restaurant], shop: [...SPECIALTIES.shop] }, maxSpecialties: MAX_SPECIALTIES, maxItemPhotos: MAX_ITEM_PHOTOS, paymentMethods: ORDER_PAYMENT_METHODS.map((m) => ({ value: m, label: ORDER_PAYMENT_LABELS[m] })), zones: DELIVERY_ZONES.map((z) => ({ value: z, label: DELIVERY_ZONE_LABELS[z] })) }),
   );
 
   // ---- Students -------------------------------------------------------------------------------------------------
@@ -170,7 +181,11 @@ export function registerCommerceRoutes(root: FastifyInstance, { service, audit, 
     async (req) => service.market(req.query.kind),
   );
 
-  app.get('/businesses/:id', { preHandler: requireAuth, schema: { tags, params: IdParams, response: { 200: BusinessDetail } } }, async (req) => service.detail(toObjectId(req.params.id)));
+  app.get('/businesses/:id', { preHandler: requireAuth, schema: { tags, params: IdParams, response: { 200: BusinessDetail } } }, async (req) => {
+    const d = await service.detail(toObjectId(req.params.id));
+    const roles = await roleIn(toObjectId(d.orgId), me(req), ['owner', 'manager', 'staff'], d.kind);
+    return { ...d, viewer: { member: !!roles, canEdit: !!roles?.some((r) => r === 'owner' || r === 'manager') } };
+  });
 
   app.post(
     '/businesses/:id/orders',
@@ -209,7 +224,10 @@ export function registerCommerceRoutes(root: FastifyInstance, { service, audit, 
         tags,
         description: 'A student opens their own shop (products or services): they get its space (catalog, orders, team); its articles show in the market.',
         body: Type.Object(
-          { name: Type.String({ minLength: 2, maxLength: 60 }), specialties: Type.Array(Type.String({ maxLength: 40 }), { minItems: 1, maxItems: MAX_SPECIALTIES, description: 'From GET /reference/commerce, 1 to 4.' }), description: Type.Optional(Type.String({ maxLength: 500 })), photoId: Type.Optional(Nullable(ObjectIdString)) },
+          {
+            name: Type.String({ minLength: 2, maxLength: 60 }), specialties: Type.Array(Type.String({ maxLength: 40 }), { minItems: 1, maxItems: MAX_SPECIALTIES, description: 'From GET /reference/commerce, 1 to 4.' }), description: Type.Optional(Type.String({ maxLength: 500 })), photoId: Type.Optional(Nullable(ObjectIdString)),
+            paymentMethods: Type.Optional(Type.Array(Type.Enum(ORDER_PAYMENT_METHODS), { minItems: 1, maxItems: ORDER_PAYMENT_METHODS.length, description: 'Default ["cash"]. Wave and Orange Money: refused (ONLINE_PAYMENTS_LOCKED) until the team verifies the shop.' })),
+          },
           { additionalProperties: false },
         ),
         response: { 201: BusinessView },
@@ -398,14 +416,16 @@ export function registerCommerceRoutes(root: FastifyInstance, { service, audit, 
       schema: {
         tags: ['admin'],
         params: IdParams,
-        description: 'The whole profile (name, picture, place, hours, delivery prices), and hide or show it again.',
-        body: Type.Object({ ...ProfileBody.properties, active: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
+        description: 'The whole profile (name, picture, place, hours, delivery prices), hide or show it again, and open Wave / Orange Money once the team has verified who runs it (`onlinePayments`).',
+        body: Type.Object({ ...ProfileBody.properties, active: Type.Optional(Type.Boolean()), onlinePayments: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
         response: { 200: BusinessView },
       },
     },
     async (req) => {
-      const { ref } = await editable(req);
-      const { active, ...profile } = req.body;
+      const { ref, b: before } = await editable(req);
+      const { active, onlinePayments, ...profile } = req.body;
+      // First: the methods sent with it are checked against the new permission.
+      if (onlinePayments !== undefined) await service.setOnlinePayments(before._id, onlinePayments);
       let b = Object.keys(profile).length ? await service.update(ref, me(req), profile) : await service.ofOrg(ref);
       if (active !== undefined) b = await service.setActive(b._id, active);
       await trace(req, 'business.update', 'business', b._id.toHexString(), { fields: Object.keys(req.body), by: 'editor' });

@@ -3,6 +3,7 @@ import { ObjectId, type ClientSession, type Collection, type Db, type MongoClien
 import type { Clock } from '../../platform/clock.js';
 import { afterCommit, withTransaction } from '../../platform/db/mongo.js';
 import { errors } from '../../platform/http/errors.js';
+import type { ImageRef } from '../../platform/media.js';
 import { randomCode } from '../../platform/security/crypto.js';
 import type { Limiter } from '../../platform/security/limiter.js';
 import { CAMPUS_LABELS, type AccountsApi, type Campus } from '../accounts/index.js';
@@ -10,7 +11,7 @@ import type { MediaApi } from '../media/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
 import type { OrganizationsApi } from '../organizations/index.js';
 import type { PaymentMethod, PaymentsApi, PurposeHandler } from '../payments/index.js';
-import { type BusinessDoc, type BusinessKind, type CatalogItemDoc, DEFAULT_PAYMENT_METHODS, DELIVERY_ZONE_LABELS, DELIVERY_ZONES, type DeliveryFees, type DeliveryZone, type ItemSection, MAX_SPECIALTIES, ORDER_AUTO_COMPLETE_H, ORDER_PAY_WITHIN_MIN, ORDER_PAYMENT_LABELS, ORDER_PAYMENT_METHODS, type OrderDoc, type OrderLine, type OrderMode, type OrderPaymentMethod, type OrderStatus, type Service, SPECIALTIES } from './commerce.types.js';
+import { type BusinessDoc, type BusinessKind, type CatalogItemDoc, DEFAULT_PAYMENT_METHODS, DELIVERY_ZONE_LABELS, DELIVERY_ZONES, type DeliveryFees, type DeliveryZone, type ItemSection, MAX_ITEM_PHOTOS, MAX_SPECIALTIES, ONLINE_PAYMENT_METHODS, onlinePaymentsAllowed, ORDER_AUTO_COMPLETE_H, ORDER_PAY_WITHIN_MIN, ORDER_PAYMENT_LABELS, ORDER_PAYMENT_METHODS, type OrderDoc, type OrderLine, type OrderMode, type OrderPaymentMethod, type OrderStatus, type Service, SPECIALTIES } from './commerce.types.js';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
@@ -48,7 +49,16 @@ export type BusinessRef = { orgId: ObjectId; kind: BusinessKind };
 const NO_DELIVERY: DeliveryFees = { campus1: null, campus2: null, outside: null };
 const delivers = (f: DeliveryFees) => DELIVERY_ZONES.some((z) => f[z] !== null);
 
-export type ItemInput = { section: ItemSection; category?: string | null; name: string; detail?: string; price: number; photoId?: string | null; stock?: number | null; available?: boolean; orderable?: boolean; sortOrder?: number };
+export type ItemInput = {
+  section: ItemSection; category?: string | null; name: string; detail?: string; price: number;
+  /** The cover first. `photoId`: older apps, one picture. */
+  photoIds?: string[]; photoId?: string | null;
+  stock?: number | null; available?: boolean; orderable?: boolean; sortOrder?: number;
+};
+
+/** The pictures asked for, `photoIds` or the older `photoId`; undefined: not changed. */
+const requestedPhotos = (input: Partial<ItemInput>): string[] | undefined =>
+  input.photoIds !== undefined ? [...new Set(input.photoIds)] : input.photoId !== undefined ? (input.photoId ? [input.photoId] : []) : undefined;
 
 export class CommerceService {
   private readonly businesses: Collection<BusinessDoc>;
@@ -124,7 +134,7 @@ export class CommerceService {
    * A student opens their own shop (products or services): under their personal entity, they own it, orders are paid
    * to their number. It's a shop like the others: catalog, orders, team, and its articles in the market.
    */
-  async openStudentShop(userId: ObjectId, input: { name: string; specialties: string[]; description?: string; photoId?: string | null }) {
+  async openStudentShop(userId: ObjectId, input: { name: string; specialties: string[]; description?: string; photoId?: string | null; paymentMethods?: OrderPaymentMethod[] }) {
     const user = await this.accounts.findById(userId);
     if (!user) throw errors.notFound();
     if (!(await this.accounts.hasStudentProfile(userId))) throw errors.forbidden('Réservé aux étudiants.');
@@ -132,11 +142,13 @@ export class CommerceService {
     const orgId = (await this.organizations.ownedBy(userId))[0]?.orgId ?? (await this.organizations.personalOrg(user))!;
     if (await this.businesses.findOne({ orgId, kind: 'shop' })) throw errors.conflict('SHOP_EXISTS', 'Tu as déjà ta boutique : ouvre-la depuis « Mes espaces ».');
     const specialties = this.checkSpecialties('shop', input.specialties)!;
+    // Cash only until the team has verified the shop (then Wave and Orange Money open).
+    const paymentMethods = this.checkMethods(input.paymentMethods ?? ['cash'], { onlinePayments: false, byStudent: true });
     await this.organizations.addCapability(orgId, 'shop');
     const now = this.clock.now();
     await this.businesses.insertOne({
       _id: new ObjectId(), orgId, kind: 'shop', name: input.name.trim(), specialties, description: '', photo: null, location: null, address: '', campus: null,
-      phone: localPhone(user.phone), services: [{ start: '08:00', end: '22:00' }], deliveryFees: NO_DELIVERY, paymentMethods: [...DEFAULT_PAYMENT_METHODS], acceptingOrders: true, active: true, byStudent: true, createdAt: now, updatedAt: now,
+      phone: localPhone(user.phone), services: [{ start: '08:00', end: '22:00' }], deliveryFees: NO_DELIVERY, paymentMethods, acceptingOrders: true, active: true, byStudent: true, onlinePayments: false, createdAt: now, updatedAt: now,
     });
     return this.update({ orgId, kind: 'shop' }, userId, { description: input.description ?? '', ...(input.photoId ? { photoId: input.photoId } : {}) });
   }
@@ -182,6 +194,27 @@ export class CommerceService {
     return this.businesses.find({}).sort({ kind: 1, name: 1 }).toArray();
   }
 
+  /** At least one, in the usual order; Wave and Orange Money only once the business may take them. */
+  private checkMethods(asked: OrderPaymentMethod[], b: Pick<BusinessDoc, 'onlinePayments' | 'byStudent'>) {
+    const methods = ORDER_PAYMENT_METHODS.filter((m) => asked.includes(m));
+    if (!methods.length) throw errors.validation('Accepte au moins un moyen de paiement.', { field: 'paymentMethods' });
+    if (!onlinePaymentsAllowed(b) && methods.some((m) => ONLINE_PAYMENT_METHODS.includes(m)))
+      throw errors.rule('ONLINE_PAYMENTS_LOCKED', 'Wave et Orange Money s’ouvrent quand l’équipe UGB Campus a vérifié ta boutique : contacte-la. En attendant, les espèces.');
+    return methods;
+  }
+
+  /**
+   * The team (back office) opens or closes Wave and Orange Money for a business. Closed: those methods are taken
+   * off, cash stays (added if it was the only way left).
+   */
+  async setOnlinePayments(id: ObjectId, allowed: boolean) {
+    const b = await this.businesses.findOne({ _id: id });
+    if (!b) throw errors.notFound('Commerce introuvable.');
+    const offline = b.paymentMethods.filter((m) => !ONLINE_PAYMENT_METHODS.includes(m));
+    const paymentMethods = allowed ? b.paymentMethods : offline.length ? offline : (['cash'] as OrderPaymentMethod[]);
+    return (await this.businesses.findOneAndUpdate({ _id: id }, { $set: { onlinePayments: allowed, paymentMethods, updatedAt: this.clock.now() } }, { returnDocument: 'after' }))!;
+  }
+
   async setActive(id: ObjectId, active: boolean) {
     const b = await this.businesses.findOneAndUpdate({ _id: id }, { $set: { active, updatedAt: this.clock.now() } }, { returnDocument: 'after' });
     if (!b) throw errors.notFound('Commerce introuvable.');
@@ -215,11 +248,7 @@ export class CommerceService {
     }
     if (input.deliveryFees !== undefined) set.deliveryFees = { ...NO_DELIVERY, ...input.deliveryFees };
     if (input.acceptingOrders !== undefined) set.acceptingOrders = input.acceptingOrders;
-    if (input.paymentMethods !== undefined) {
-      const methods = ORDER_PAYMENT_METHODS.filter((m) => input.paymentMethods!.includes(m));
-      if (!methods.length) throw errors.validation('Accepte au moins un moyen de paiement.', { field: 'paymentMethods' });
-      set.paymentMethods = methods;
-    }
+    if (input.paymentMethods !== undefined) set.paymentMethods = this.checkMethods(input.paymentMethods, b);
     await this.businesses.updateOne({ _id: b._id }, { $set: set });
     // The previous photo leaves the storage once the new one is saved.
     if (set.photo !== undefined && !(set.photo && b.photo && set.photo.mediaId.equals(b.photo.mediaId))) await this.media.release([b.photo?.mediaId]);
@@ -243,7 +272,7 @@ export class CommerceService {
     const orderable = input.orderable ?? true;
     const doc: CatalogItemDoc = {
       _id: new ObjectId(), businessId: b._id, section: input.section, category: input.category?.trim() || null, name: input.name.trim(), detail: input.detail?.trim() ?? '', price: input.price,
-      photo: input.photoId ? (await this.media.claim(by, [input.photoId]))[0]! : null, stock: b.kind === 'shop' && orderable ? (input.stock ?? null) : null, available: input.available ?? true, orderable,
+      photos: await this.itemPhotos(by, requestedPhotos(input) ?? [], []), stock: b.kind === 'shop' && orderable ? (input.stock ?? null) : null, available: input.available ?? true, orderable,
       sortOrder: input.sortOrder ?? now.getTime(), archivedAt: null, createdAt: now, updatedAt: now,
     };
     await this.items.insertOne(doc);
@@ -261,7 +290,8 @@ export class CommerceService {
     if (input.name !== undefined) set.name = input.name.trim();
     if (input.detail !== undefined) set.detail = input.detail.trim();
     if (input.price !== undefined) set.price = input.price;
-    if (input.photoId !== undefined) set.photo = input.photoId ? (await this.media.claim(by, [input.photoId]))[0]! : null;
+    const photoIds = requestedPhotos(input);
+    if (photoIds !== undefined) set.photos = await this.itemPhotos(by, photoIds, item.photos);
     if (input.stock !== undefined && b.kind === 'shop') set.stock = input.stock;
     if (input.available !== undefined) set.available = input.available;
     if (input.orderable !== undefined) set.orderable = input.orderable;
@@ -269,7 +299,8 @@ export class CommerceService {
     if ((set.orderable ?? item.orderable) === false) set.stock = null;
     if (input.sortOrder !== undefined) set.sortOrder = input.sortOrder;
     await this.items.updateOne({ _id: itemId }, { $set: set });
-    if (set.photo !== undefined && !(set.photo && item.photo && set.photo.mediaId.equals(item.photo.mediaId))) await this.media.release([item.photo?.mediaId]);
+    // Pictures taken off the article leave the storage once the new set is saved.
+    if (set.photos) await this.media.release(item.photos.filter((old) => !set.photos!.some((p) => p.mediaId.equals(old.mediaId))).map((p) => p.mediaId));
     return (await this.items.findOne({ _id: itemId }))!;
   }
 
@@ -372,15 +403,25 @@ export class CommerceService {
       paymentMethods: b.paymentMethods.map((m) => ({ value: m, label: ORDER_PAYMENT_LABELS[m] })),
       active: b.active,
       byStudent: !!b.byStudent,
+      onlinePayments: onlinePaymentsAllowed(b),
     };
   }
 
   itemView(i: CatalogItemDoc) {
     return {
-      id: i._id.toHexString(), section: i.section, category: i.category, name: i.name, detail: i.detail, price: i.price, photo: i.photo?.url ?? null,
+      id: i._id.toHexString(), section: i.section, category: i.category, name: i.name, detail: i.detail, price: i.price,
+      photo: i.photos[0]?.url ?? null, photos: i.photos.map((p) => p.url), photoIds: i.photos.map((p) => p.mediaId.toHexString()),
       stock: i.stock, soldOut: i.stock !== null && i.stock <= 0, available: i.available, orderable: i.orderable,
-      photoId: i.photo?.mediaId.toHexString() ?? null,
     };
+  }
+
+  /** Pictures already on the article stay as they are; new uploads must be the editor's. */
+  private async itemPhotos(by: ObjectId, ids: string[], current: ImageRef[]): Promise<ImageRef[]> {
+    if (ids.length > MAX_ITEM_PHOTOS) throw errors.validation(`${MAX_ITEM_PHOTOS} photos au plus.`, { field: 'photoIds' });
+    const kept = new Map(current.map((p) => [p.mediaId.toHexString(), p]));
+    const fresh = ids.filter((id) => !kept.has(id));
+    const claimed = fresh.length ? await this.media.claim(by, fresh) : [];
+    return ids.map((id) => kept.get(id) ?? claimed.find((c) => c.mediaId.toHexString() === id)!);
   }
 
   // ---- Students: ordering -----------------------------------------------------------------------------------------
@@ -396,7 +437,10 @@ export class CommerceService {
     const returnUrl = cash ? null : this.payments.validateReturnUrl(input.returnUrl);
     const b = await this.businesses.findOne({ _id: businessId, active: true });
     if (!b) throw errors.notFound('Commerce introuvable.');
-    if (!b.paymentMethods.includes(input.method)) {
+    // Its owner and team manage it; they don't order from it.
+    if ((await this.organizations.members(b.orgId, b.kind)).some((m) => m.userId.equals(userId)))
+      throw errors.rule('OWN_BUSINESS', b.kind === 'shop' ? 'C’est ta boutique : tu ne peux pas y commander.' : 'C’est ton restaurant : tu ne peux pas y commander.');
+    if (!b.paymentMethods.includes(input.method) || (ONLINE_PAYMENT_METHODS.includes(input.method) && !onlinePaymentsAllowed(b))) {
       throw errors.validation(`${b.name} accepte : ${b.paymentMethods.map((m) => ORDER_PAYMENT_LABELS[m]).join(', ')}.`, { field: 'method' });
     }
     const st = this.status(b);
@@ -694,7 +738,7 @@ export class CommerceService {
     const customers = forBusiness ? await this.accounts.contactsByIds([...new Map(docs.map((d) => [d.userId.toHexString(), d.userId])).values()]) : new Map();
     // Each line with its item's current picture (null once the item has none, or was deleted).
     const itemIds = [...new Map(docs.flatMap((d) => d.lines.map((l) => [l.itemId.toHexString(), l.itemId] as const))).values()];
-    const photos = new Map((await this.items.find({ _id: { $in: itemIds } }, { projection: { photo: 1 } }).toArray()).map((i) => [i._id.toHexString(), i.photo?.url ?? null]));
+    const photos = new Map((await this.items.find({ _id: { $in: itemIds } }, { projection: { photos: 1 } }).toArray()).map((i) => [i._id.toHexString(), i.photos?.[0]?.url ?? null]));
     return Promise.all(
       docs.map(async (o) => {
         const b = businesses.find((x) => x._id.equals(o.businessId))!;
