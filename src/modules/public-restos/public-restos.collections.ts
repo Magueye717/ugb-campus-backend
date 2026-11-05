@@ -3,7 +3,8 @@ import { ObjectId } from 'mongodb';
 import type { DataMigration } from '../../platform/db/migrations.js';
 import { bson, type CollectionSpec } from '../../platform/db/schema.js';
 import { CAMPUSES } from '../accounts/index.js';
-import { DISH_STATUSES, MEALS, type Meal } from './public-restos.types.js';
+import { CAMPUS_RESTOS } from './public-restos.catalog.js';
+import { DEFAULT_SERVICES, DISH_STATUSES, MEALS, type Meal } from './public-restos.types.js';
 
 /** "Thiébou  Dieun " → "thiébou dieun": one catalogue entry per dish name. */
 export const dishKey = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -110,6 +111,27 @@ export const publicRestosMigrations: DataMigration[] = [
         );
       for (const d of COMMON_DISHES) await add(d.name, d.detail, d.meals, 0);
       for (const m of await db.collection('publicMenus').find({}).toArray()) for (const d of m.dishes as { name: string; detail: string }[]) await add(d.name, d.detail, [m.meal as Meal], 1);
+    },
+  },
+  {
+    id: '2026-11-05-campus-restos',
+    description: 'Resto 1 and Resto 2, added once (by slug), without menus',
+    async up(db) {
+      const restos = db.collection('publicRestos');
+      const now = new Date();
+      for (const [i, r] of CAMPUS_RESTOS.entries()) {
+        // Never twice, never over one the team already created or archived.
+        await restos.updateOne(
+          { slug: r.slug },
+          {
+            $setOnInsert: {
+              _id: new ObjectId(), slug: r.slug, name: r.name, location: r.location, campus: r.campus, point: r.coords, sortOrder: i + 1,
+              services: DEFAULT_SERVICES, status: 'active', createdAt: now, updatedAt: now,
+            },
+          },
+          { upsert: true },
+        );
+      }
     },
   },
 ];

@@ -21,6 +21,8 @@ describe('places', () => {
   it('the place editors add, edit and hide places; students see the active ones', async () => {
     const editor = await createStaff(t, ['place_editor']);
     const s = await registerStudent(t);
+    // A new database starts with the campus places (places migration): this test works on its own two.
+    await t.c.mongo.db.collection('places').deleteMany({});
     await t.c.modules.places.service.seed([{ name: 'Bibliothèque universitaire', category: 'Études', location: { lat: 16.0629, lng: -16.4232 }, photoUrls: ['https://example.com/bu.jpg'] }]);
 
     expect((await call(s, 'POST', '/admin/places', { name: 'Kiosque', category: 'Services', location: { lat: 16.06, lng: -16.42 } })).statusCode).toBe(403);

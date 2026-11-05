@@ -1,4 +1,8 @@
+import { ObjectId } from 'mongodb';
+
+import type { DataMigration } from '../../platform/db/migrations.js';
 import { bson, type CollectionSpec } from '../../platform/db/schema.js';
+import { CAMPUS_PLACES } from './places.catalog.js';
 import { PLACE_CATEGORIES } from './places.types.js';
 
 export const placesCollections: CollectionSpec[] = [
@@ -20,5 +24,29 @@ export const placesCollections: CollectionSpec[] = [
       ),
     },
     indexes: [{ key: { active: 1, sortOrder: 1 }, options: { name: 'listing' } }],
+  },
+];
+
+/**
+ * The campus places, once per database (staging, production, a new developer's): added when missing, by name. It
+ * never runs again, so a place the team deletes or renames in the app stays as they left it.
+ */
+export const placesMigrations: DataMigration[] = [
+  {
+    id: '2026-11-05-campus-places',
+    description: 'Campus places from OpenStreetMap, added once (by name)',
+    async up(db) {
+      const places = db.collection('places');
+      const existing = new Set((await places.find({}, { projection: { name: 1 } }).toArray()).map((p) => p.name as string));
+      const now = new Date();
+      const missing = CAMPUS_PLACES.map((p, i) => ({ p, i })).filter(({ p }) => !existing.has(p.name));
+      if (!missing.length) return;
+      await places.insertMany(
+        missing.map(({ p, i }) => ({
+          _id: new ObjectId(), name: p.name, category: p.category, description: p.description, area: p.area, campus: p.campus, location: p.location, hours: p.hours, icon: p.icon,
+          photos: p.photoUrls.map((url) => ({ url, mediaId: null })), active: true, sortOrder: i, createdAt: now, updatedAt: now,
+        })),
+      );
+    },
   },
 ];

@@ -76,6 +76,11 @@ envVarGroups:
 
       - key: MONGODB_URI
         sync: false
+      # The first administrator: created by the pre-deploy step if no account uses this phone, never changed after.
+      - key: BOOTSTRAP_ADMIN_PHONE
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
       - key: MONGODB_DB
         value: ugb-campus-staging
       - key: REDIS_PREFIX

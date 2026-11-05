@@ -17,6 +17,14 @@ const EnvSchema = Type.Object({
   SUPPORT_PHONE: Type.String({ default: '777902880' }),
   SUPPORT_EMAIL: Type.String({ default: 'ugb.campus@gmail.com' }),
   /**
+   * The first administrator, created by the deploy's migrate step when no account uses this phone (never changed
+   * afterwards: an existing account keeps its password and roles). Both empty: nothing is created.
+   */
+  BOOTSTRAP_ADMIN_PHONE: Type.Optional(Type.String()),
+  BOOTSTRAP_ADMIN_PASSWORD: Type.Optional(Type.String({ minLength: 8 })),
+  BOOTSTRAP_ADMIN_FIRST_NAME: Type.String({ default: 'Admin' }),
+  BOOTSTRAP_ADMIN_LAST_NAME: Type.String({ default: 'Campus' }),
+  /**
    * The rentrée, every year ("MM-DD", Dakar): once given, the student's UFR, region and card details stay as they are
    * until the next one (a filled field can't be changed in between; an empty one can always be filled).
    */

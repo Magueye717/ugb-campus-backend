@@ -4,6 +4,7 @@ import type { Db, ObjectId } from 'mongodb';
 import { actorOf } from '../../platform/auth/auth.js';
 import type { Clock } from '../../platform/clock.js';
 import { errors } from '../../platform/http/errors.js';
+import { normalizePhone } from '../../platform/phone.js';
 import { toObjectId } from '../../platform/http/schemas.js';
 import type { AuditApi } from '../audit/index.js';
 import type { MediaApi, MediaUsage } from '../media/index.js';
@@ -41,6 +42,22 @@ export type AccountsApi = Pick<
 
 /** Profile pictures. The media module deletes a picture once none of these reference it. */
 export const ACCOUNTS_MEDIA_USAGE: MediaUsage[] = [{ collection: 'users', path: 'avatar.mediaId' }];
+
+/**
+ * Deploys: the first administrator (platform role `admin`), from the server's settings. Only when no account uses this
+ * phone yet: an existing one is left exactly as it is (its password and roles are never changed here).
+ */
+export async function ensureBootstrapAdmin(db: Db, clock: Clock, input: { phone: string; password: string; firstName: string; lastName: string }): Promise<'created' | 'exists'> {
+  const phone = normalizePhone(input.phone);
+  if (!phone) throw new Error('BOOTSTRAP_ADMIN_PHONE is not a valid Senegalese number');
+  const service = new AccountsService(new AccountsRepository(db), clock, () => {
+    throw new Error('Organizations are not available while bootstrapping the administrator');
+  });
+  if (await service.findByPhone(phone)) return 'exists';
+  const user = await service.createStaffUser({ phone, password: input.password, firstName: input.firstName, lastName: input.lastName });
+  await service.setPlatformRoles(user._id, ['admin']);
+  return 'created';
+}
 
 export function createAccountsModule(deps: { db: Db; clock: Clock; rentree: string; audit: AuditApi; organizations: () => OrganizationsPort; notifications: () => NotificationsApi; media: () => Pick<MediaApi, 'claim' | 'release'> }): AccountsApi {
   const service = new AccountsService(new AccountsRepository(deps.db), deps.clock, deps.organizations, deps.rentree);

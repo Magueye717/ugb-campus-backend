@@ -4,11 +4,11 @@ import type { Db } from 'mongodb';
 import type { Clock } from '../../platform/clock.js';
 import type { AuditApi } from '../audit/index.js';
 import type { MediaApi, MediaUsage } from '../media/index.js';
-import { placesCollections } from './places.collections.js';
+import { placesCollections, placesMigrations } from './places.collections.js';
 import { registerPlacesRoutes } from './places.routes.js';
 import { PlacesService } from './places.service.js';
 
-export { placesCollections };
+export { placesCollections, placesMigrations };
 
 export type PlacesApi = {
   registerRoutes(app: FastifyInstance, requireEditor: preHandlerHookHandler): void;

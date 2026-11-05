@@ -1,5 +1,6 @@
 import type { Campus, PlatformRole, Region, UfrCode } from '../../src/modules/accounts/index.js';
 import type { OrgCategory, OrgLevel, OrgRole } from '../../src/modules/organizations/index.js';
+import { CAMPUS_RESTOS } from '../../src/modules/public-restos/public-restos.catalog.js';
 
 /** Development only. Documented in the README; never valid anywhere else. */
 export const DEMO_PASSWORD = 'Campus2026';
@@ -48,11 +49,7 @@ type SeedDish = { name: string; detail: string; status?: 'available' | 'low' | '
  */
 export const publicRestos: { slug: string; name: string; location: string; campus: Campus; coords: { lat: number; lng: number }; lunch: SeedDish[][]; dinner: SeedDish[][] }[] = [
   {
-    slug: 'resto-1',
-    name: 'Resto 1',
-    location: 'Campus 1, près de la direction du CROUS',
-    campus: 'campus1',
-    coords: { lat: 16.0657, lng: -16.42605 },
+    ...CAMPUS_RESTOS[0]!,
     lunch: [
       [{ name: 'Vermicelle', detail: 'Poulet · légumes' }, { name: 'Mafé yap', detail: 'Riz · sauce arachide', status: 'low' }, { name: 'Thiébou dieun', detail: 'Riz au poisson', status: 'low' }],
       [{ name: 'Yassa poulet', detail: 'Riz · oignons' }, { name: 'Soupou kandia', detail: 'Riz · gombo' }],
@@ -64,11 +61,7 @@ export const publicRestos: { slug: string; name: string; location: string; campu
     ],
   },
   {
-    slug: 'resto-2',
-    name: 'Resto 2',
-    location: 'Campus 1, près de l’arrêt de bus',
-    campus: 'campus1',
-    coords: { lat: 16.06777, lng: -16.42155 },
+    ...CAMPUS_RESTOS[1]!,
     lunch: [
       [{ name: 'Pailla', detail: 'Riz · viande' }, { name: 'Thiou Carry', detail: 'Riz · poulet' }],
       [{ name: 'Mafé poulet', detail: 'Riz · sauce arachide' }, { name: 'Vermicelle', detail: 'Poulet · légumes' }],
@@ -285,83 +278,8 @@ export const businesses: {
   },
 ];
 
-/**
- * The campus places, positioned from OpenStreetMap (© OpenStreetMap contributors, ODbL). The team completes and
- * corrects them in the app's "Lieux" staff tab.
- */
-type SeedPlace = { name: string; category: 'Études' | 'Restauration' | 'Services' | 'Sport' | 'Santé' | 'Administration' | 'Logement' | 'Culte' | 'Transport'; location: { lat: number; lng: number }; icon: string; area: string; campus: Campus | null; hours: string | null; description: string; photoUrls: string[] };
-export const campusPlaces: SeedPlace[] = [
-  {name: "Village A", category: "Logement", location: {lat: 16.06548, lng: -16.42074}, icon: "bed-outline", area: "Campus 1", campus: "campus1", hours: null, description: "Village A du campus 1 (chambres partagées).", photoUrls: []},
-  {name: "Village B", category: "Logement", location: {lat: 16.06475, lng: -16.42123}, icon: "bed-outline", area: "Campus 1", campus: "campus1", hours: null, description: "Village B du campus 1 (chambres partagées).", photoUrls: []},
-  {name: "Village C", category: "Logement", location: {lat: 16.06461, lng: -16.42211}, icon: "bed-outline", area: "Campus 1", campus: "campus1", hours: null, description: "Village C du campus 1 (chambres partagées).", photoUrls: []},
-  {name: "Village D", category: "Logement", location: {lat: 16.06476, lng: -16.42372}, icon: "bed-outline", area: "Campus 1", campus: "campus1", hours: null, description: "Village D du campus 1 (chambres partagées).", photoUrls: []},
-  {name: "Village E", category: "Logement", location: {lat: 16.06647, lng: -16.42374}, icon: "bed-outline", area: "Campus 1", campus: "campus1", hours: null, description: "Village E du campus 1 (chambres partagées).", photoUrls: []},
-  {name: "Village F", category: "Logement", location: {lat: 16.06648, lng: -16.42273}, icon: "bed-outline", area: "Campus 1", campus: "campus1", hours: null, description: "Village F du campus 1 (chambres partagées).", photoUrls: []},
-  {name: "Village G", category: "Logement", location: {lat: 16.06605, lng: -16.42171}, icon: "bed-outline", area: "Campus 1", campus: "campus1", hours: null, description: "Village G du campus 1 (chambres partagées).", photoUrls: []},
-  {name: "Village M", category: "Logement", location: {lat: 16.06693, lng: -16.42295}, icon: "bed-outline", area: "Campus 1", campus: "campus1", hours: null, description: "Village M du campus 1 (chambres partagées).", photoUrls: []},
-  {name: "Village Q", category: "Logement", location: {lat: 16.06765, lng: -16.42502}, icon: "bed-outline", area: "Campus 1", campus: "campus1", hours: null, description: "Village Q du campus 1 (chambres partagées).", photoUrls: []},
-  {name: "Village H", category: "Logement", location: {lat: 16.06343, lng: -16.42579}, icon: "bed-outline", area: "Campus 2", campus: "campus2", hours: null, description: "Village H du campus 2 (chambres individuelles).", photoUrls: []},
-  {name: "Village I", category: "Logement", location: {lat: 16.06207, lng: -16.42631}, icon: "bed-outline", area: "Campus 2", campus: "campus2", hours: null, description: "Village I du campus 2 (chambres individuelles).", photoUrls: []},
-  {name: "Village J", category: "Logement", location: {lat: 16.06254, lng: -16.42781}, icon: "bed-outline", area: "Campus 2", campus: "campus2", hours: null, description: "Village J du campus 2 (chambres individuelles).", photoUrls: []},
-  {name: "Village K", category: "Logement", location: {lat: 16.06115, lng: -16.42749}, icon: "bed-outline", area: "Campus 2", campus: "campus2", hours: null, description: "Village K du campus 2 (chambres individuelles).", photoUrls: []},
-  {name: "Village L", category: "Logement", location: {lat: 16.06407, lng: -16.42723}, icon: "bed-outline", area: "Campus 2", campus: "campus2", hours: null, description: "Village L du campus 2 (chambres individuelles).", photoUrls: []},
-  {name: "Village N", category: "Logement", location: {lat: 16.06534, lng: -16.42781}, icon: "bed-outline", area: "Campus 2", campus: "campus2", hours: null, description: "Village N du campus 2 (chambres individuelles).", photoUrls: []},
-  {name: "Village O", category: "Logement", location: {lat: 16.0656, lng: -16.42707}, icon: "bed-outline", area: "Campus 2", campus: "campus2", hours: null, description: "Village O du campus 2 (chambres individuelles).", photoUrls: []},
-  {name: "Bibliothèque universitaire centrale", category: "Études", location: {lat: 16.06158, lng: -16.42285}, icon: "library-outline", area: "Campus pédagogique", campus: null, hours: "8h-22h · lun.-sam.", description: "Salles de lecture, wifi et prêt de livres avec la carte étudiant. Calme garanti pour réviser.", photoUrls: ["https://images.unsplash.com/photo-1521587760476-6c12a4b040da?w=800&q=70&auto=format&fit=crop", "https://images.unsplash.com/photo-1481627834876-b7833e8f5570?w=800&q=70&auto=format&fit=crop", "https://images.unsplash.com/photo-1568667256549-094345857637?w=800&q=70&auto=format&fit=crop"]},
-  {name: "Amphi A · Madické Diop", category: "Études", location: {lat: 16.06146, lng: -16.42309}, icon: "school-outline", area: "Campus pédagogique", campus: null, hours: null, description: "Le plus grand amphi du campus : cours magistraux et conférences.", photoUrls: ["https://images.unsplash.com/photo-1524178232363-1fb2b075b655?w=800&q=70&auto=format&fit=crop", "https://images.unsplash.com/photo-1606761568499-6d2451b23c66?w=800&q=70&auto=format&fit=crop"]},
-  {name: "Amphi B", category: "Études", location: {lat: 16.0619, lng: -16.42279}, icon: "school-outline", area: "Campus pédagogique", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Amphi C", category: "Études", location: {lat: 16.06119, lng: -16.42362}, icon: "school-outline", area: "Campus pédagogique", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Bâtiment A", category: "Études", location: {lat: 16.06192, lng: -16.4223}, icon: "easel-outline", area: "Campus pédagogique", campus: null, hours: null, description: "Bureaux et salles de cours.", photoUrls: []},
-  {name: "Bâtiment B", category: "Études", location: {lat: 16.06212, lng: -16.42213}, icon: "easel-outline", area: "Campus pédagogique", campus: null, hours: null, description: "Bureaux et salles de cours.", photoUrls: []},
-  {name: "Bâtiment C", category: "Études", location: {lat: 16.0623, lng: -16.42194}, icon: "easel-outline", area: "Campus pédagogique", campus: null, hours: null, description: "Bureaux et salles de cours.", photoUrls: []},
-  {name: "Bâtiment D", category: "Études", location: {lat: 16.06232, lng: -16.42164}, icon: "easel-outline", area: "Campus pédagogique", campus: null, hours: null, description: "Bureaux et salles de cours.", photoUrls: []},
-  {name: "Bâtiment E", category: "Études", location: {lat: 16.06185, lng: -16.42353}, icon: "easel-outline", area: "Campus pédagogique", campus: null, hours: null, description: "Bureaux et salles de cours.", photoUrls: []},
-  {name: "Bâtiment F", category: "Études", location: {lat: 16.06149, lng: -16.42446}, icon: "easel-outline", area: "Campus pédagogique", campus: null, hours: null, description: "Bureaux et salles de cours.", photoUrls: []},
-  {name: "Bâtiment J", category: "Études", location: {lat: 16.06252, lng: -16.42303}, icon: "easel-outline", area: "Campus pédagogique", campus: null, hours: null, description: "Bureaux et salles de cours.", photoUrls: []},
-  {name: "Bâtiment L", category: "Études", location: {lat: 16.06113, lng: -16.42502}, icon: "easel-outline", area: "Campus pédagogique", campus: null, hours: null, description: "Bureaux et salles de cours.", photoUrls: []},
-  {name: "UFR SEFS", category: "Études", location: {lat: 16.0638, lng: -16.42031}, icon: "school-outline", area: "Campus pédagogique", campus: null, hours: null, description: "Sciences de l’éducation, de la formation et du sport.", photoUrls: []},
-  {name: "Centre de calcul", category: "Études", location: {lat: 16.06118, lng: -16.42409}, icon: "desktop-outline", area: "Campus pédagogique", campus: null, hours: null, description: "Salles informatiques.", photoUrls: []},
-  {name: "MIAGE", category: "Études", location: {lat: 16.06076, lng: -16.42422}, icon: "desktop-outline", area: "Campus pédagogique", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Laboratoire LEIDI", category: "Études", location: {lat: 16.0617, lng: -16.42187}, icon: "flask-outline", area: "Campus pédagogique", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Incubateur", category: "Études", location: {lat: 16.06255, lng: -16.41924}, icon: "bulb-outline", area: "Est du campus", campus: null, hours: null, description: "Accompagnement des projets et startups étudiants.", photoUrls: []},
-  {name: "Case culturelle", category: "Études", location: {lat: 16.06254, lng: -16.42694}, icon: "musical-notes-outline", area: "Campus 2", campus: "campus2", hours: null, description: "", photoUrls: []},
-  {name: "Rectorat", category: "Administration", location: {lat: 16.06252, lng: -16.42123}, icon: "business-outline", area: "Allées des UFR", campus: null, hours: "8h-16h · lun.-ven.", description: "Direction de l’université. Bureau des objets trouvés au rez-de-chaussée.", photoUrls: ["https://images.unsplash.com/photo-1562774053-701939374585?w=800&q=70&auto=format&fit=crop", "https://images.unsplash.com/photo-1586773860418-d37222d8fce3?w=800&q=70&auto=format&fit=crop"]},
-  {name: "Direction de la scolarité", category: "Administration", location: {lat: 16.06092, lng: -16.42523}, icon: "document-text-outline", area: "Campus pédagogique", campus: null, hours: "8h-16h · lun.-ven.", description: "Inscriptions, attestations et relevés de notes. Viens tôt en période d’inscription.", photoUrls: []},
-  {name: "Direction du CROUS", category: "Administration", location: {lat: 16.06713, lng: -16.42607}, icon: "business-outline", area: "Campus 1", campus: "campus1", hours: "8h-16h · lun.-ven.", description: "Logement, restauration et bourses.", photoUrls: []},
-  {name: "Agence comptable", category: "Administration", location: {lat: 16.06179, lng: -16.42052}, icon: "calculator-outline", area: "Près du Rectorat", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Poste de police", category: "Administration", location: {lat: 16.06051, lng: -16.42167}, icon: "shield-checkmark-outline", area: "Entrée du campus", campus: null, hours: "24h/24", description: "", photoUrls: []},
-  {name: "Restaurant universitaire 1", category: "Restauration", location: {lat: 16.0657, lng: -16.42605}, icon: "restaurant-outline", area: "Campus 1", campus: "campus1", hours: "12h-15h · 19h-21h", description: "Restaurant universitaire : menus du jour au ticket. Les menus sont dans l’onglet Manger.", photoUrls: ["https://images.unsplash.com/photo-1567521464027-f127ff144326?w=800&q=70&auto=format&fit=crop", "https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800&q=70&auto=format&fit=crop"]},
-  {name: "Restaurant universitaire 2", category: "Restauration", location: {lat: 16.06777, lng: -16.42155}, icon: "restaurant-outline", area: "Campus 1", campus: "campus1", hours: "12h-15h · 19h-21h", description: "Restaurant universitaire : menus du jour au ticket.", photoUrls: []},
-  {name: "Cafétéria de l’UGB", category: "Restauration", location: {lat: 16.06519, lng: -16.42567}, icon: "cafe-outline", area: "Campus 1", campus: "campus1", hours: null, description: "", photoUrls: []},
-  {name: "Le Virage", category: "Restauration", location: {lat: 16.06508, lng: -16.41926}, icon: "restaurant-outline", area: "Est du campus", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Service médical des étudiants", category: "Santé", location: {lat: 16.06663, lng: -16.42668}, icon: "medkit-outline", area: "Campus 1 · près du CROUS", campus: null, hours: "8h-18h · urgences 24h/24", description: "Consultations gratuites pour les étudiants inscrits, pharmacie de base et urgences.", photoUrls: ["https://images.unsplash.com/photo-1519494026892-80bbd2d6fd0d?w=800&q=70&auto=format&fit=crop", "https://images.unsplash.com/photo-1538108149393-fbbd81895907?w=800&q=70&auto=format&fit=crop"]},
-  {name: "Médecine du travail", category: "Santé", location: {lat: 16.06561, lng: -16.41959}, icon: "medical-outline", area: "Est du campus", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Clinique Laress", category: "Santé", location: {lat: 16.06838, lng: -16.41959}, icon: "medical-outline", area: "Nord-est du campus", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Complexe sportif", category: "Sport", location: {lat: 16.06375, lng: -16.42473}, icon: "football-outline", area: "Centre du campus", campus: null, hours: "7h-20h", description: "Terrains, piste d’athlétisme et salle de sport. Matchs inter-UFR le week-end.", photoUrls: ["https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=800&q=70&auto=format&fit=crop", "https://images.unsplash.com/photo-1551958219-acbc608c6377?w=800&q=70&auto=format&fit=crop"]},
-  {name: "Terrain Valentin", category: "Sport", location: {lat: 16.06604, lng: -16.42487}, icon: "football-outline", area: "Campus 1", campus: "campus1", hours: null, description: "", photoUrls: []},
-  {name: "Terrain Valentin 2", category: "Sport", location: {lat: 16.06653, lng: -16.42541}, icon: "football-outline", area: "Campus 1", campus: "campus1", hours: null, description: "", photoUrls: []},
-  {name: "Terrain du campus 2", category: "Sport", location: {lat: 16.06315, lng: -16.42686}, icon: "football-outline", area: "Campus 2", campus: "campus2", hours: null, description: "", photoUrls: []},
-  {name: "Tour de l’Œuf", category: "Sport", location: {lat: 16.06556, lng: -16.42283}, icon: "basketball-outline", area: "Campus 1", campus: "campus1", hours: null, description: "Terrain de basket au cœur des villages.", photoUrls: []},
-  {name: "Grande Mosquée de l’UGB", category: "Culte", location: {lat: 16.06403, lng: -16.42306}, icon: "moon-outline", area: "Centre du campus", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Mosquée du village A", category: "Culte", location: {lat: 16.06572, lng: -16.42085}, icon: "moon-outline", area: "Village A", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Mosquée du village C", category: "Culte", location: {lat: 16.06473, lng: -16.422}, icon: "moon-outline", area: "Village C", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Mosquée du village E", category: "Culte", location: {lat: 16.06643, lng: -16.42355}, icon: "moon-outline", area: "Village E", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Mosquée du village F", category: "Culte", location: {lat: 16.06632, lng: -16.4226}, icon: "moon-outline", area: "Village F", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Mosquée du village G", category: "Culte", location: {lat: 16.06623, lng: -16.42155}, icon: "moon-outline", area: "Village G", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Mosquée du village H", category: "Culte", location: {lat: 16.06348, lng: -16.42615}, icon: "moon-outline", area: "Village H", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Mosquée du village I", category: "Culte", location: {lat: 16.06225, lng: -16.42601}, icon: "moon-outline", area: "Village I", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Mosquée du village J", category: "Culte", location: {lat: 16.06228, lng: -16.42782}, icon: "moon-outline", area: "Village J", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Mosquée du village K", category: "Culte", location: {lat: 16.06154, lng: -16.42753}, icon: "moon-outline", area: "Village K", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Mosquée du village L", category: "Culte", location: {lat: 16.06402, lng: -16.42681}, icon: "moon-outline", area: "Village L", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Mosquée du village M", category: "Culte", location: {lat: 16.06771, lng: -16.42346}, icon: "moon-outline", area: "Village M", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Mosquée du village N", category: "Culte", location: {lat: 16.0648, lng: -16.42811}, icon: "moon-outline", area: "Village N", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Ecobank", category: "Services", location: {lat: 16.06483, lng: -16.4244}, icon: "card-outline", area: "Campus 1", campus: "campus1", hours: null, description: "Agence et distributeur.", photoUrls: []},
-  {name: "Distributeur Ecobank (UFR)", category: "Services", location: {lat: 16.06216, lng: -16.42172}, icon: "cash-outline", area: "Allées des UFR", campus: null, hours: null, description: "", photoUrls: []},
-  {name: "Euréka (photocopies)", category: "Services", location: {lat: 16.06604, lng: -16.42236}, icon: "print-outline", area: "Campus 1", campus: "campus1", hours: null, description: "Photocopies, impression et reliure.", photoUrls: []},
-  {name: "Maison de l’Université", category: "Services", location: {lat: 16.06884, lng: -16.41818}, icon: "home-outline", area: "Nord-est du campus", campus: null, hours: null, description: "Hébergement des visiteurs.", photoUrls: []},
-  {name: "Arrêt de bus", category: "Transport", location: {lat: 16.06693, lng: -16.42193}, icon: "bus-outline", area: "Campus 1", campus: "campus1", hours: null, description: "Bus vers Saint-Louis.", photoUrls: []},
-  {name: "Parking du Rectorat", category: "Transport", location: {lat: 16.06215, lng: -16.42119}, icon: "car-outline", area: "Près du Rectorat", campus: null, hours: null, description: "", photoUrls: []},
-];
+/** The campus places: the same list every database gets once (places migration). */
+export { CAMPUS_PLACES as campusPlaces } from '../../src/modules/places/places.catalog.js';
 
 /** Places of the first seed, now replaced (renamed, or made up). */
 export const retiredPlaces = ['Bibliothèque universitaire', 'Rectorat · Scolarité', 'Amphithéâtre A', 'Resto 1', 'Barbier du Village E', 'Copy Center', 'Terrain de sport', 'Centre médical', 'Village H · Campus 2'];

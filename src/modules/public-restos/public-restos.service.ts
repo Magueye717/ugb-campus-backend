@@ -7,7 +7,7 @@ import { randomCode } from '../../platform/security/crypto.js';
 import type { Campus } from '../accounts/index.js';
 import type { AlertsApi } from '../alerts/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
-import { MEAL_LABELS, MEALS, type Dish, type DishInput, type DishStatus, type Meal, type PublicDishDoc, type PublicMenuDoc, type PublicRestoDoc, type Service } from './public-restos.types.js';
+import { DEFAULT_SERVICES, MEAL_LABELS, MEALS, type Dish, type DishInput, type DishStatus, type Meal, type PublicDishDoc, type PublicMenuDoc, type PublicRestoDoc, type Service } from './public-restos.types.js';
 import { dishKey } from './public-restos.collections.js';
 
 const MIN = 60_000;
@@ -20,8 +20,6 @@ export const localDate = (d: Date) => dakarDay.format(d);
 /** "2026-11-02" + "15:00" → the instant. Dakar is UTC+0 all year (no daylight saving). */
 const instant = (date: string, hm: string) => new Date(`${date}T${hm}:00.000Z`);
 const isDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(instant(s, '00:00').getTime());
-
-export const DEFAULT_SERVICES: Record<Meal, Service> = { lunch: { start: '12:00', end: '15:00' }, dinner: { start: '19:00', end: '21:00' } };
 
 const dishView = (d: Dish) => ({ id: d.dishId, name: d.name, detail: d.detail, status: d.status, statusAt: d.statusAt.toISOString() });
 export const menuView = (m: PublicMenuDoc) => ({ id: m._id.toHexString(), restoId: m.restoId.toHexString(), date: m.date, meal: m.meal, dishes: m.dishes.map(dishView), updatedAt: m.updatedAt.toISOString() });

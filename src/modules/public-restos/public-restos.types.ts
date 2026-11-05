@@ -13,6 +13,9 @@ export type DishStatus = (typeof DISH_STATUSES)[number];
 /** Local time "HH:MM" (Africa/Dakar). */
 export type Service = { start: string; end: string };
 
+/** A new restaurant's service hours, until the team changes them. */
+export const DEFAULT_SERVICES: Record<Meal, Service> = { lunch: { start: '12:00', end: '15:00' }, dinner: { start: '19:00', end: '21:00' } };
+
 /** A university restaurant ("Resto 1"), run by the university's catering staff. */
 export type PublicRestoDoc = {
   _id: ObjectId;

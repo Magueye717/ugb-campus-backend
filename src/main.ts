@@ -3,10 +3,9 @@ import { createRequire } from 'node:module';
 import pino from 'pino';
 
 import { buildApp } from './app.js';
-import { allCollections, migrateDatabase } from './collections.js';
 import { loadConfig } from './config/env.js';
 import { createContainer } from './container.js';
-import { connectMongo } from './platform/db/mongo.js';
+import { runMigrate } from './migrate.js';
 import { startWorkers } from './worker.js';
 
 const role = process.argv[2] ?? 'api';
@@ -22,16 +21,9 @@ const hasPretty = (() => {
 })();
 const log = pino({ level: config.LOG_LEVEL, ...(config.NODE_ENV === 'development' && hasPretty ? { transport: { target: 'pino-pretty' } } : {}) });
 
-// Deploys run this before the new version starts (Render's pre-deploy command): collections, validators and
-// indexes, then pending data migrations. Idempotent. Needs only MongoDB.
+// Deploys run this before the new version starts (Render's pre-deploy command). Needs only MongoDB.
 if (role === 'migrate') {
-  const { client, db } = await connectMongo(config.MONGODB_URI, config.MONGODB_DB);
-  try {
-    const applied = await migrateDatabase(db);
-    log.info({ specs: allCollections.length, db: config.MONGODB_DB, migrations: applied }, applied.length ? 'migrations applied' : 'no pending migration');
-  } finally {
-    await client.close();
-  }
+  await runMigrate(config, log);
   process.exit(0);
 }
 
