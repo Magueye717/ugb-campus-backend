@@ -1,4 +1,4 @@
-# Render Blueprint: the API, the worker and Redis, in Frankfurt (the closest Render region to Senegal).
+# Render Blueprint (STAGING, from the `staging` branch): the API, the worker and Redis, in Frankfurt (the closest Render region to Senegal).
 # MongoDB is on MongoDB Atlas (same region: AWS eu-central-1); pictures on Cloudflare R2.
 # Values marked `sync: false` are asked for when the Blueprint is created, and never stored in this file.
 #
@@ -7,10 +7,10 @@
 
 services:
   - type: web
-    name: ugb-campus-api
+    name: ugb-campus-api-staging
     runtime: docker
     repo: https://github.com/Magueye717/ugb-campus-backend
-    branch: main
+    branch: staging
     region: frankfurt
     plan: starter
     dockerfilePath: ./Dockerfile
@@ -21,37 +21,37 @@ services:
     healthCheckPath: /health/ready
     autoDeploy: true
     envVars:
-      - fromGroup: ugb-campus-backend
+      - fromGroup: ugb-campus-backend-staging
       - key: PORT
         value: 3000
       - key: REDIS_URL
         fromService:
           type: keyvalue
-          name: ugb-campus-redis
+          name: ugb-campus-redis-staging
           property: connectionString
 
   - type: worker
-    name: ugb-campus-worker
+    name: ugb-campus-worker-staging
     runtime: docker
     repo: https://github.com/Magueye717/ugb-campus-backend
-    branch: main
+    branch: staging
     region: frankfurt
     plan: starter
     dockerfilePath: ./Dockerfile
     dockerCommand: node dist/main.js worker
     autoDeploy: true
     envVars:
-      - fromGroup: ugb-campus-backend
+      - fromGroup: ugb-campus-backend-staging
       - key: REDIS_URL
         fromService:
           type: keyvalue
-          name: ugb-campus-redis
+          name: ugb-campus-redis-staging
           property: connectionString
 
   # Queues (BullMQ) and rate limits. Paid plan: kept on disk across restarts. `noeviction`: a full Redis refuses new
   # jobs instead of silently dropping queued ones.
   - type: keyvalue
-    name: ugb-campus-redis
+    name: ugb-campus-redis-staging
     region: frankfurt
     plan: starter
     maxmemoryPolicy: noeviction
@@ -59,7 +59,7 @@ services:
     ipAllowList: []
 
 envVarGroups:
-  - name: ugb-campus-backend
+  - name: ugb-campus-backend-staging
     envVars:
       - key: NODE_ENV
         value: production
@@ -77,7 +77,7 @@ envVarGroups:
       - key: MONGODB_URI
         sync: false
       - key: MONGODB_DB
-        value: ugb_campus
+        value: ugb-campus-db
       - key: REDIS_PREFIX
         value: ugb
 
