@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module';
+
 import pino from 'pino';
 
 import { buildApp } from './app.js';
@@ -9,7 +11,16 @@ import { startWorkers } from './worker.js';
 
 const role = process.argv[2] ?? 'api';
 const config = loadConfig();
-const log = pino({ level: config.LOG_LEVEL, ...(config.NODE_ENV === 'development' ? { transport: { target: 'pino-pretty' } } : {}) });
+// Readable logs on a developer's machine; JSON elsewhere, and whenever pino-pretty (a dev dependency) isn't installed.
+const hasPretty = (() => {
+  try {
+    createRequire(import.meta.url).resolve('pino-pretty');
+    return true;
+  } catch {
+    return false;
+  }
+})();
+const log = pino({ level: config.LOG_LEVEL, ...(config.NODE_ENV === 'development' && hasPretty ? { transport: { target: 'pino-pretty' } } : {}) });
 
 // Deploys run this before the new version starts (Render's pre-deploy command): collections, validators and
 // indexes, then pending data migrations. Idempotent. Needs only MongoDB.
