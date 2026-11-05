@@ -77,7 +77,7 @@ envVarGroups:
       - key: MONGODB_URI
         sync: false
       - key: MONGODB_DB
-        value: ugb-campus-db
+        value: ugb-campus-staging
       - key: REDIS_PREFIX
         value: ugb
 
