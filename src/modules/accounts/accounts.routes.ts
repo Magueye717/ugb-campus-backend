@@ -55,7 +55,7 @@ export function registerAccountsRoutes(root: FastifyInstance, { service, audit, 
     },
     async (req, reply) => {
       if ((await service.claimStudentNumber(me(req), req.body.studentNumber)) === 'has-other') {
-        throw errors.conflict('STUDENT_NUMBER_SET', 'Ton numéro étudiant est déjà enregistré : il ne se change pas ici. Écris à l’équipe UGB Campus en cas d’erreur.');
+        throw errors.conflict('STUDENT_NUMBER_SET', 'Ton numéro étudiant est déjà enregistré : il ne se change pas ici. Écris à l’équipe UGB Connect en cas d’erreur.');
       }
       return reply.status(204).send();
     },

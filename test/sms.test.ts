@@ -12,13 +12,13 @@ describe('Twilio SMS', () => {
   it('sends with the API key and the sender number, without logging the text', async () => {
     const fetch = reply(201, { sid: 'SM1', status: 'queued' });
     const sms = new TwilioSmsSender({ accountSid: SID, auth: { keySid: KEY, keySecret: 'secret-secret-123' }, from: { number: '+15005550006' } }, log, fetch);
-    await sms.send('+221771234567', 'UGB Campus : ton code est 4821.');
+    await sms.send('+221771234567', 'UGB Connect : ton code est 4821.');
 
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`https://api.twilio.com/2010-04-01/Accounts/${SID}/Messages.json`);
     expect((init.headers as Record<string, string>).authorization).toBe(`Basic ${Buffer.from(`${KEY}:secret-secret-123`).toString('base64')}`);
     const form = new URLSearchParams(String(init.body));
-    expect(Object.fromEntries(form)).toEqual({ To: '+221771234567', Body: 'UGB Campus : ton code est 4821.', From: '+15005550006' });
+    expect(Object.fromEntries(form)).toEqual({ To: '+221771234567', Body: 'UGB Connect : ton code est 4821.', From: '+15005550006' });
     expect(JSON.stringify(log.info.mock.calls)).not.toContain('4821');
   });
 

@@ -40,6 +40,7 @@ const EnvSchema = Type.Object({
   DOCS_ENABLED: Bool,
 
   MONGODB_URI: Type.String({ default: 'mongodb://localhost:27018/?replicaSet=rs0' }),
+  // Kept from the first name (UGB Campus): the existing databases are called so.
   MONGODB_DB: Type.String({ default: 'ugb_campus' }),
   REDIS_URL: Type.String({ default: 'redis://localhost:6379' }),
   /** Namespaces Redis keys and BullMQ queues (tests use one per file). */
@@ -85,7 +86,7 @@ const EnvSchema = Type.Object({
   /** HMAC secret of the simulated provider's webhooks. */
   SIMULATOR_WEBHOOK_SECRET: Type.Optional(Type.String({ minLength: 32 })),
   /**
-   * Public base URL of the API (e.g. https://api.ugb-campus.sn), used in checkout links. Without it, the host the
+   * Public base URL of the API (e.g. https://api.ugb-connect.sn), used in checkout links. Without it, the host the
    * app called is used, which is what a phone on the same Wi-Fi needs in development.
    */
   PUBLIC_API_URL: Type.Optional(Type.String({ pattern: '^https?://[^/]+$' })),
@@ -106,7 +107,7 @@ const EnvSchema = Type.Object({
   MEDIA_DIR: Type.String({ default: './var/media' }),
   /** Lost student cards are read by OCR (Tesseract): its French language data is downloaded once into this folder. */
   OCR_CACHE_DIR: Type.String({ default: './var/ocr' }),
-  /** Public base URL of the stored files (CDN or bucket domain), e.g. https://media.ugb-campus.sn. Local: the API's /media. */
+  /** Public base URL of the stored files (CDN or bucket domain), e.g. https://media.ugb-connect.sn. Local: the API's /media. */
   MEDIA_PUBLIC_URL: Type.Optional(Type.String({ pattern: '^https?://' })),
   S3_BUCKET: Type.Optional(Type.String()),
   S3_REGION: Type.String({ default: 'auto' }),

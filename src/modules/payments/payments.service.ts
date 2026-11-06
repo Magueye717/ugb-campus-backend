@@ -27,7 +27,8 @@ export const PAYMENTS_SWEEP_QUEUE = 'payments.sweep';
 const MAX_PAYOUT_ATTEMPTS = 5;
 
 /** Deep links the checkout page may send the student back to: the app's scheme, and Expo Go in development. */
-const RETURN_SCHEMES = ['ugbcampus:'];
+// The app's link scheme (ugbconnect://); the old one stays accepted for builds installed before the rename.
+const RETURN_SCHEMES = ['ugbconnect:', 'ugbcampus:'];
 const DEV_RETURN_SCHEMES = ['exp:', 'exps:'];
 
 export type NewPayment = {

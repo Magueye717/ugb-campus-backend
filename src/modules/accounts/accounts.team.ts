@@ -87,7 +87,7 @@ export class PlatformTeam {
       await this.notifications().notify([user._id], {
         type: 'team.role_added', category: 'social', icon: 'shield-checkmark-outline', tone: 'primary', url: space ? `/espace?vers=${space.space}` : null,
         dedupeKey: `team:${user._id.toHexString()}:${roles.join('+')}:${this.clock.now().getTime()}`,
-        title: 'Tu rejoins l’équipe UGB Campus',
+        title: 'Tu rejoins l’équipe UGB Connect',
         body: `Rôle : ${added.map((r) => PLATFORM_ROLE_LABELS[r]).join(', ')}. Ouvre l’espace depuis ton profil, « Mes espaces ».`,
       });
     }
@@ -103,7 +103,7 @@ export class PlatformTeam {
     await this.notifications().notify([userId], {
       type: 'team.role_removed', category: 'social', icon: 'shield-outline', tone: 'warning', url: null,
       dedupeKey: `team-removed:${userId.toHexString()}:${this.clock.now().getTime()}`,
-      title: 'Tu ne fais plus partie de l’équipe UGB Campus',
+      title: 'Tu ne fais plus partie de l’équipe UGB Connect',
       body: 'Tes rôles et leurs espaces sont retirés.',
     });
   }

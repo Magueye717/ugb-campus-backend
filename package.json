@@ -1,5 +1,5 @@
 {
-  "name": "ugb-campus-backend",
+  "name": "ugb-connect-backend",
   "version": "0.1.0",
   "private": true,
   "description": "UGB Campus backend: Fastify modular monolith",

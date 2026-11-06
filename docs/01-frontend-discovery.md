@@ -1,6 +1,6 @@
 # 01 — Frontend discovery and integration map
 
-Status: **draft for approval**. Source inspected: `ugb-campus/` (Expo SDK 58, Expo Router, branch `develop`).
+Status: **draft for approval**. Source inspected: `ugb-connect/` (then `ugb-campus/`) (Expo SDK 58, Expo Router, branch `develop`).
 
 All data is mock data, held in memory in React contexts (`context/*.tsx`) and in `constants/data.ts`. None of it persists across launches. The frontend has no HTTP layer yet (no `fetch`, no API client, no token storage).
 

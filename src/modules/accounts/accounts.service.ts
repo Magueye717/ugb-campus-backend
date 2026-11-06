@@ -394,7 +394,7 @@ export class AccountsService {
   /** The student's own card was just read and its number is theirs: they may save their identity for a while. */
   /**
    * A student without a number gives theirs (on the profile, or from their own card read by the camera). Once set it
-   * doesn't change here (a typo is fixed by the UGB Campus team): `has-other` when the profile already has another.
+   * doesn't change here (a typo is fixed by the UGB Connect team): `has-other` when the profile already has another.
    */
   async claimStudentNumber(userId: ObjectId, input: string): Promise<'set' | 'has-other'> {
     const number = this.normalizeStudentNumber(input);
@@ -404,7 +404,7 @@ export class AccountsService {
     try {
       await this.repo.profiles.updateOne({ _id: profile._id, studentNumber: null }, { $set: { studentNumber: number, updatedAt: this.clock.now() } });
     } catch (err) {
-      if (isDuplicateKey(err, 'student_number_unique_when_set')) throw errors.conflict('STUDENT_NUMBER_TAKEN', 'Ce numéro étudiant est déjà utilisé par un autre compte. Écris à l’équipe UGB Campus si c’est le tien.');
+      if (isDuplicateKey(err, 'student_number_unique_when_set')) throw errors.conflict('STUDENT_NUMBER_TAKEN', 'Ce numéro étudiant est déjà utilisé par un autre compte. Écris à l’équipe UGB Connect si c’est le tien.');
       throw err;
     }
     return 'set';

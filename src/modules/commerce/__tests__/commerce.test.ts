@@ -59,7 +59,8 @@ describe('restaurants', () => {
 
     const s = await registerStudent(t);
     const listed = (await ok(call(s, 'GET', '/businesses?kind=restaurant'))).items.find((x: { id: string }) => x.id === b.id);
-    expect(listed).toMatchObject({ open: true, minPrice: 300, highlights: [expect.objectContaining({ name: 'Mafé yap' })] });
+    // « Dès » the cheapest dish (the Mafé), not the 300 F Bissap.
+    expect(listed).toMatchObject({ open: true, minPrice: 1500, highlights: [expect.objectContaining({ name: 'Mafé yap' })] });
     expect((await ok(call(s, 'GET', `/businesses/${b.id}`))).items.map((i: { name: string }) => i.name)).toEqual(['Bissap', 'Mafé yap']);
   });
 
@@ -216,6 +217,15 @@ describe('shops', () => {
     // Made orderable again: it can be ordered.
     expect(await ok(call(owner, 'PATCH', `/org/${orgId}/${sp}/catalog/${print.id}`, { orderable: true }))).toMatchObject({ orderable: true });
     await ok(call(s, 'POST', `/businesses/${b.id}/orders`, { lines: [{ itemId: print.id, qty: 1 }], mode: 'pickup', method: 'wave' }), 201);
+  });
+
+  it('a restaurant is « dès » its cheapest dish, never a drink', async () => {
+    const { b, owner, orgId, sp } = await business('restaurant');
+    await ok(call(owner, 'POST', `/org/${orgId}/${sp}/catalog`, { section: 'drink', name: 'Eau 50 cl', detail: '', price: 250 }), 201);
+    await ok(call(owner, 'POST', `/org/${orgId}/${sp}/catalog`, { section: 'menu', name: 'Thiéboudienne', detail: 'Poisson', price: 1500 }), 201);
+    const s = await registerStudent(t);
+    const listed = (await ok(call(s, 'GET', '/businesses?kind=restaurant'))).items.find((x: { id: string }) => x.id === b.id);
+    expect(listed.minPrice).toBe(1500);
   });
 
   it('« Intéressé » on a service done on the spot: the shop is told who (with the phone), once; never for an orderable article', async () => {

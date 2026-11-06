@@ -26,7 +26,7 @@ function conditions(c: Contacts): Section[] {
     {
       title: 'Objet',
       paragraphs: [
-        'UGB Campus est une application destinée aux étudiants de l’Université Gaston Berger de Saint-Louis et aux commerces, organisateurs et équipes qui travaillent avec eux. Elle regroupe : les menus des restaurants universitaires, la commande auprès des restaurants et boutiques du campus, la réservation de places dans les caravanes, le partage de taxis (Sunu Taxi), la billetterie des événements, les objets perdus et trouvés, les lieux du campus et les annonces.',
+        'UGB Connect est une application destinée aux étudiants de l’Université Gaston Berger de Saint-Louis et aux commerces, organisateurs et équipes qui travaillent avec eux. Elle regroupe : les menus des restaurants universitaires, la commande auprès des restaurants et boutiques du campus, la réservation de places dans les caravanes, le partage de taxis (Sunu Taxi), la billetterie des événements, les objets perdus et trouvés, les lieux du campus et les annonces.',
         'En créant un compte, tu acceptes les présentes conditions. Si tu ne les acceptes pas, n’utilise pas l’application.',
       ],
     },
@@ -41,7 +41,7 @@ function conditions(c: Contacts): Section[] {
     {
       title: 'Paiements',
       paragraphs: [
-        'Les paiements se font par Wave ou Orange Money, ou en espèces lorsque le commerce l’accepte. UGB Campus ne conserve jamais tes codes ni l’accès à ton compte Wave ou Orange Money : le paiement est validé chez l’opérateur.',
+        'Les paiements se font par Wave ou Orange Money, ou en espèces lorsque le commerce l’accepte. UGB Connect ne conserve jamais tes codes ni l’accès à ton compte Wave ou Orange Money : le paiement est validé chez l’opérateur.',
         'Les prix sont affichés en francs CFA, toutes taxes comprises. Le prix d’une caravane, d’un billet ou d’un article est celui affiché au moment de la commande.',
       ],
     },
@@ -57,7 +57,7 @@ function conditions(c: Contacts): Section[] {
     {
       title: 'Commerces, organisateurs et événements',
       paragraphs: [
-        'Les restaurants, boutiques, organisateurs de caravanes et d’événements sont seuls responsables de leurs produits, de leurs trajets et de leurs événements (qualité, horaires, sécurité, respect des lois). UGB Campus met en relation et encaisse pour leur compte, puis leur reverse les sommes dues.',
+        'Les restaurants, boutiques, organisateurs de caravanes et d’événements sont seuls responsables de leurs produits, de leurs trajets et de leurs événements (qualité, horaires, sécurité, respect des lois). UGB Connect met en relation et encaisse pour leur compte, puis leur reverse les sommes dues.',
         `Un étudiant qui publie son propre événement le soumet à la validation de l’équipe. Une fois validé, il paie la publication (${PUBLICATION_FEE.perPlace} FCFA par place mise en vente, ${PUBLICATION_FEE.minimum} FCFA au minimum). Ces frais ne sont pas remboursés si l’organisateur annule l’événement ; les billets vendus, eux, sont remboursés aux acheteurs.`,
       ],
     },
@@ -83,7 +83,7 @@ function conditions(c: Contacts): Section[] {
     {
       title: 'Responsabilité',
       paragraphs: [
-        'Nous faisons notre possible pour que l’application fonctionne en continu et que les informations (menus, horaires, annonces) soient à jour, mais elles peuvent changer sans préavis. UGB Campus n’est pas responsable des dommages résultant d’une indisponibilité du service, d’un opérateur de paiement ou du fait d’un commerce ou d’un organisateur.',
+        'Nous faisons notre possible pour que l’application fonctionne en continu et que les informations (menus, horaires, annonces) soient à jour, mais elles peuvent changer sans préavis. UGB Connect n’est pas responsable des dommages résultant d’une indisponibilité du service, d’un opérateur de paiement ou du fait d’un commerce ou d’un organisateur.',
       ],
     },
     {
@@ -130,7 +130,7 @@ function confidentialite(c: Contacts): Section[] {
         'Le commerce ou l’organisateur concerné voit ce qu’il faut pour te servir : ton prénom, ton nom, ton numéro pour une livraison ou un départ, ta commande ou ton billet.',
         'Les autres étudiants voient ce que tu publies (objets perdus, trajets Sunu Taxi). Tes avis sont anonymes pour eux.',
         'Les opérateurs de paiement (Wave, Orange Money) et nos prestataires techniques (hébergement, envoi de SMS et de notifications) traitent les données nécessaires à leur service, pour notre compte uniquement.',
-        'L’équipe UGB Campus, selon son rôle (support, finances, validation des contenus). Les autorités, uniquement si la loi l’exige.',
+        'L’équipe UGB Connect, selon son rôle (support, finances, validation des contenus). Les autorités, uniquement si la loi l’exige.',
       ],
     },
     {

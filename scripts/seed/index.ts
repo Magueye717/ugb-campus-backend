@@ -13,7 +13,7 @@ import sharp from 'sharp';
 
 import { bannerPackages, businesses, campusPlaces, demoAds, demoPictures, DEMO_PASSWORD, departures, organizations, publicRestos, restoAssignments, retiredPlaces, seedAlerts, staff, students, taxiTrips, vehicles } from './data.js';
 
-// Development data mirroring ugb-campus/constants/data.ts. Idempotent; refuses to run against production.
+// Development data mirroring ugb-connect/constants/data.ts. Idempotent; refuses to run against production.
 const config = loadConfig();
 if (config.isProduction) throw new Error('The seed never runs in production.');
 

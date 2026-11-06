@@ -416,7 +416,7 @@ export class EventsService {
   private async fields(orgId: ObjectId, by: ObjectId, input: EventInput) {
     // Verified organizations, and students with their own organization (their events are reviewed by the admins).
     if (!(await this.organizations.can(orgId, 'events')) && !(await this.organizations.isPersonal(orgId))) {
-      throw errors.forbidden('Ton organisation n’est pas encore vérifiée pour vendre des billets. Contacte l’équipe UGB Campus.');
+      throw errors.forbidden('Ton organisation n’est pas encore vérifiée pour vendre des billets. Contacte l’équipe UGB Connect.');
     }
     const startsAt = new Date(input.startsAt);
     const endsAt = new Date(input.endsAt);
@@ -536,7 +536,7 @@ export class EventsService {
     const returnUrl = this.payments.validateReturnUrl(input.returnUrl);
     const e = await this.own(orgId, id);
     if (e.status !== 'approved') {
-      throw errors.conflict('EVENT_NOT_APPROVED', e.status === 'published' ? 'Cet événement est déjà publié.' : 'L’événement doit d’abord être validé par l’équipe UGB Campus.');
+      throw errors.conflict('EVENT_NOT_APPROVED', e.status === 'published' ? 'Cet événement est déjà publié.' : 'L’événement doit d’abord être validé par l’équipe UGB Connect.');
     }
     const now = this.clock.now();
     if (e.salesCloseAt <= now) throw errors.rule('EVENT_TOO_SOON', 'Trop tard pour ouvrir la billetterie.');
@@ -742,7 +742,7 @@ export class EventsService {
   /** After the event: the paid tickets (and fees kept on late cancellations) to the organization's number. Once. */
   async claim(orgId: ObjectId, id: ObjectId, userId: ObjectId, method: PaymentMethod): Promise<PayoutDoc> {
     const phone = await this.organizations.payoutPhone(orgId);
-    if (!phone) throw errors.rule('NO_PAYOUT_ACCOUNT', 'Aucun numéro de paiement pour l’organisation. Demande à l’équipe UGB Campus de l’enregistrer.');
+    if (!phone) throw errors.rule('NO_PAYOUT_ACCOUNT', 'Aucun numéro de paiement pour l’organisation. Demande à l’équipe UGB Connect de l’enregistrer.');
     let payout!: PayoutDoc;
     await withTransaction(this.mongo, async (session) => {
       const e = await this.own(orgId, id, session);

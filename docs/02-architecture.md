@@ -133,7 +133,7 @@ __tests__/     → unit + integration tests
 ## 4. Folder structure
 
 ```
-ugb-campus-backend/
+ugb-connect-backend/
 ├── src/
 │   ├── main.ts                 # `node dist/main.js api|worker`
 │   ├── app.ts                  # buildApp(): Fastify instance + plugins + module routes

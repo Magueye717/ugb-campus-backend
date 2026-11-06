@@ -4,9 +4,9 @@ import { PermanentSmsError, type SmsSender } from '../../platform/sms/sms.js';
 import { OTP_QUEUE, type OtpJob } from './otp.service.js';
 
 const TEXT: Record<OtpJob['purpose'], (code: string) => string> = {
-  register: (code) => `UGB Campus : ton code de vérification est ${code}. Il expire dans 5 minutes. Ne le partage avec personne.`,
-  change_phone: (code) => `UGB Campus : code pour utiliser ce numéro sur ton compte : ${code}. Si tu n’as rien demandé, ignore ce message.`,
-  reset_password: (code) => `UGB Campus : code pour changer ton mot de passe : ${code}. Si tu n’as rien demandé, ignore ce message.`,
+  register: (code) => `UGB Connect : ton code de vérification est ${code}. Il expire dans 5 minutes. Ne le partage avec personne.`,
+  change_phone: (code) => `UGB Connect : code pour utiliser ce numéro sur ton compte : ${code}. Si tu n’as rien demandé, ignore ce message.`,
+  reset_password: (code) => `UGB Connect : code pour changer ton mot de passe : ${code}. Si tu n’as rien demandé, ignore ce message.`,
 };
 
 /**

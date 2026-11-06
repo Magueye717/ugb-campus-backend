@@ -429,7 +429,7 @@ export class TicketingService {
     const phone = this.accounts.phoneOrThrow(recipientPhone);
     const recipient = await this.accounts.findByPhone(phone);
     if (!recipient || recipient.status !== 'active' || !(await this.accounts.hasStudentProfile(recipient._id))) {
-      throw errors.rule('RECIPIENT_NOT_FOUND', 'Aucun étudiant inscrit sur ce numéro. Ton ami doit d’abord créer son compte UGB Campus.');
+      throw errors.rule('RECIPIENT_NOT_FOUND', 'Aucun étudiant inscrit sur ce numéro. Ton ami doit d’abord créer son compte UGB Connect.');
     }
     if (recipient._id.equals(fromUserId)) throw errors.rule('SELF_TRANSFER', 'C’est ton propre numéro.');
     if (await this.hasActiveTicket(t.eventId, recipient._id)) throw errors.rule('RECIPIENT_HAS_TICKET', 'Ton ami a déjà un billet pour ce départ.');
@@ -610,7 +610,7 @@ export class TicketingService {
     let t: TicketDoc | null;
     if (input.qr) {
       const claims = await this.tokens.verifyTicket(input.qr.trim());
-      if (!claims || !ObjectId.isValid(claims.ticketId)) return reject('bad_signature', 'Pas un billet UGB Campus', 'Ce QR code ne vient pas de l’app. Refuse l’accès.');
+      if (!claims || !ObjectId.isValid(claims.ticketId)) return reject('bad_signature', 'Pas un billet UGB Connect', 'Ce QR code ne vient pas de l’app. Refuse l’accès.');
       t = await this.tickets.findOne({ _id: new ObjectId(claims.ticketId) });
       if (!t) return reject('unknown', 'Billet non valable', 'Billet inconnu : faux ou trop ancien.');
       if (t.orgId.equals(orgId) && claims.version !== t.version) {

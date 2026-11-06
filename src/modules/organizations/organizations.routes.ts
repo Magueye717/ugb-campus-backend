@@ -101,7 +101,7 @@ export function registerOrganizationsRoutes(root: FastifyInstance, { service, au
     roles: SPACE_ROLES[req.params.space].map((r) => ({ value: r, label: ROLE_LABELS[r] })),
   }));
 
-  // Adding someone, step 1: is the number already on UGB Campus? (Then step 2 only asks for the role.)
+  // Adding someone, step 1: is the number already on UGB Connect? (Then step 2 only asks for the role.)
   app.post(
     '/org/:orgId/members/lookup',
     { preHandler: [requireAuth, requireOrgRole(['owner'])], schema: { tags: ['organizer'], params: OrgParams, body: Type.Object({ phone: PhoneInput }, { additionalProperties: false }), response: { 200: Lookup } } },

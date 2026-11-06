@@ -4,6 +4,7 @@ import { SignJWT, exportJWK, jwtVerify, errors as joseErrors } from 'jose';
 import type { Config } from '../../config/env.js';
 import type { Clock } from '../clock.js';
 
+// Kept from the first name (UGB Campus): every session and ticket QR already issued carries it.
 const ISSUER = 'ugb-campus';
 
 export type AccessClaims = { sub: string; sid: string; roles: string[]; /** Expiry, seconds since epoch: long-lived connections (WebSocket) close then. */ exp: number };

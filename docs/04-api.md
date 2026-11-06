@@ -16,7 +16,7 @@ Base: `/api/v1`. JSON only, except media upload (multipart). OpenAPI 3.1 is gene
 - **Errors:** `application/problem+json`:
 
   ```json
-  { "type": "https://api.ugb-campus.sn/errors/seat-taken", "title": "Seat taken", "status": 409,
+  { "type": "https://api.ugb-connect.sn/errors/seat-taken", "title": "Seat taken", "status": 409,
     "code": "SEAT_TAKEN", "message": "Cette place vient d’être prise. Choisis-en une autre.", "requestId": "…" }
   ```
 

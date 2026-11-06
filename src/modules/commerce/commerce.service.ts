@@ -204,7 +204,7 @@ export class CommerceService {
     const methods = ORDER_PAYMENT_METHODS.filter((m) => asked.includes(m));
     if (!methods.length) throw errors.validation('Accepte au moins un moyen de paiement.', { field: 'paymentMethods' });
     if (!onlinePaymentsAllowed(b) && methods.some((m) => ONLINE_PAYMENT_METHODS.includes(m)))
-      throw errors.rule('ONLINE_PAYMENTS_LOCKED', 'Wave et Orange Money s’ouvrent quand l’équipe UGB Campus a vérifié ta boutique : contacte-la. En attendant, les espèces.');
+      throw errors.rule('ONLINE_PAYMENTS_LOCKED', 'Wave et Orange Money s’ouvrent quand l’équipe UGB Connect a vérifié ta boutique : contacte-la. En attendant, les espèces.');
     return methods;
   }
 
@@ -345,7 +345,13 @@ export class CommerceService {
         return {
           ...this.publicView(b),
           highlights: mine.filter((i) => i.section !== 'drink').slice(0, 3).map((i) => this.itemView(i, liked, interested)),
-          minPrice: mine.length ? Math.min(...mine.map((i) => i.price)) : null,
+          // « Dès 1 500 F »: the cheapest dish, never a drink (a 250 F water would say nothing about the meal). A shop has
+          // no drinks section: all its articles count.
+          minPrice: (() => {
+            const dishes = mine.filter((i) => i.section !== 'drink');
+            const priced = dishes.length ? dishes : mine;
+            return priced.length ? Math.min(...priced.map((i) => i.price)) : null;
+          })(),
           itemsCount: mine.length,
           // Searching "mafé" finds the restaurants that serve it.
           itemNames: mine.map((i) => i.name),

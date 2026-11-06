@@ -53,7 +53,7 @@ export async function buildApp(c: Container, state = { shuttingDown: false }): P
   if (c.config.DOCS_ENABLED) {
     await app.register(swagger, {
       openapi: {
-        info: { title: 'UGB Campus API', version: '1.0.0', description: 'Backend of the UGB Campus app. Swagger UI is the temporary back office (non-production only).' },
+        info: { title: 'UGB Connect API', version: '1.0.0', description: 'Backend of the UGB Connect app. Swagger UI is the temporary back office (non-production only).' },
         components: { securitySchemes: { bearer: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' } } },
         security: [{ bearer: [] }],
       },

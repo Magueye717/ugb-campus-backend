@@ -1,6 +1,6 @@
-# UGB Campus — Backend
+# UGB Connect — Backend
 
-The backend for the UGB Campus mobile app (`../ugb-campus`): a **modular monolith** built with Node 22 LTS, TypeScript, Fastify 5, MongoDB (replica set), Redis and BullMQ.
+The backend for the UGB Connect mobile app (`../ugb-connect`): a **modular monolith** built with Node 22 LTS, TypeScript, Fastify 5, MongoDB (replica set), Redis and BullMQ.
 
 > **Status: architecture approved. Implementation in progress (Phase 5: infrastructure, Phase 6: auth/accounts).**
 
@@ -33,7 +33,7 @@ The backend for the UGB Campus mobile app (`../ugb-campus`): a **modular monolit
 | 9 | places, academics, scholarships | |
 | 10 | frontend integration (UI unchanged), then hardening (security review, k6), then deployment readiness | |
 
-Each step ships with its tests. The seed data mirrors `ugb-campus/constants/data.ts`.
+Each step ships with its tests. The seed data mirrors `ugb-connect/constants/data.ts`.
 
 ## Run it locally
 
@@ -68,7 +68,7 @@ Password: **`Campus2026`** for every account. OTP code in development: **`1234`*
 
 ```bash
 npm run typecheck && npm run lint && npm test   # tests need the compose MongoDB (27018) and Redis
-docker build -t ugb-campus-backend .            # multi-stage, non-root runtime image
+docker build -t ugb-connect-backend .            # multi-stage, non-root runtime image
 ```
 
 ESLint enforces the module boundaries: a module imports another module only through its `index.ts`, and `platform/` never imports a module.

@@ -31,7 +31,7 @@ const simulate = (reference: string, action: 'pay' | 'fail' | 'cancel' | 'duplic
   t.app.inject({ method: 'POST', url: `/api/v1/dev/payment-simulator/${reference}/${action}`, headers: { 'content-type': 'text/plain' }, payload: '' });
 
 async function joinAndPay(s: Student, tripId: string) {
-  const res = await call(s, 'POST', `/taxi/trips/${tripId}/join`, { method: 'wave', returnUrl: 'ugbcampus://paiement/retour' });
+  const res = await call(s, 'POST', `/taxi/trips/${tripId}/join`, { method: 'wave', returnUrl: 'ugbconnect://paiement/retour' });
   expect(res.statusCode, res.body).toBe(201);
   const { payment } = json(res);
   const paid = await simulate(payment.reference, 'pay');

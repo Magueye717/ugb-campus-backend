@@ -147,5 +147,5 @@ ${action('pay', 'Payer', 'pay')}${action('fail', 'Échec du paiement', 'alt')}${
 
 function donePage(status: string) {
   const text: Record<string, string> = { succeeded: 'Paiement effectué.', failed: 'Le paiement a échoué.', cancelled: 'Paiement annulé.', expired: 'Ce paiement a expiré.' };
-  return shell('Paiement', `<h1>${text[status] ?? 'Paiement traité.'}</h1><p>Retourne dans l’application UGB Campus.</p>`);
+  return shell('Paiement', `<h1>${text[status] ?? 'Paiement traité.'}</h1><p>Retourne dans l’application UGB Connect.</p>`);
 }
