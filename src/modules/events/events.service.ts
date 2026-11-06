@@ -10,8 +10,9 @@ import { CAMPUSES, REGIONS, UFR_CODES, VILLAGES, type AccountsApi, type Audience
 import type { MediaApi } from '../media/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
 import type { OrgCard, OrganizationsApi } from '../organizations/index.js';
-import type { PaymentDoc, PaymentMethod, PaymentsApi, PayoutDoc, PurposeHandler } from '../payments/index.js';
+import { PAYMENT_METHODS, type PaymentMethod, type PaymentsApi, type PayoutDoc, type PurposeHandler } from '../payments/index.js';
 import type { EventSummary, TicketingApi, TicketKindHandler } from '../ticketing/index.js';
+import { TICKET_PAYMENT_LABELS, type TicketPaymentMethod } from '../ticketing/index.js';
 import {
   CATEGORY_LABELS,
   ENTRY_GRACE_MS,
@@ -77,6 +78,8 @@ export type EventInput = {
   salesCloseAt?: string;
   ticketTypes: { name: string; description?: string | null; price: number; capacity: number }[];
   maxPerStudent?: number;
+  /** Default: Wave and Orange Money. */
+  paymentMethods?: TicketPaymentMethod[];
 };
 
 /**
@@ -166,6 +169,7 @@ export class EventsService {
       salesOpen: e.status === 'published' && now < e.salesCloseAt && e.ticketTypes.some((t) => t.remaining > 0),
       minPrice: Math.min(...prices),
       maxPerStudent: e.maxPerStudent,
+      paymentMethods: e.paymentMethods ?? [...PAYMENT_METHODS],
       ticketTypes: e.ticketTypes.map((t) => ({ typeId: t.typeId, name: t.name, description: t.description, price: t.price, remaining: t.remaining, soldOut: t.remaining === 0 })),
       cancellation: e.cancellation ? { at: e.cancellation.at.toISOString(), reason: e.cancellation.reason } : null,
       review: e.review ? { message: e.review.message, at: e.review.at.toISOString() } : null,
@@ -176,9 +180,11 @@ export class EventsService {
    * Holds the tickets for 10 minutes and opens one payment (none for a free event: the tickets are issued at once).
    * Places are taken with a conditional update per ticket type: two students can never take the last place twice.
    */
-  async book(userId: ObjectId, eventId: ObjectId, input: { items: { typeId: string; qty: number }[]; method: PaymentMethod; returnUrl?: string | null }, baseUrl: string) {
+  async book(userId: ObjectId, eventId: ObjectId, input: { items: { typeId: string; qty: number }[]; method: TicketPaymentMethod; returnUrl?: string | null }, baseUrl: string) {
     await this.limiter.hit(`event-book:${userId.toHexString()}`, { limit: 20, windowS: 3600 });
-    this.payments.assertAvailable(input.method);
+    // Cash: nothing to pay here, the tickets are issued at once and paid at the door.
+    const cash = input.method === 'cash';
+    if (!cash) this.payments.assertAvailable(input.method as PaymentMethod);
     const returnUrl = this.payments.validateReturnUrl(input.returnUrl);
     const e = await this.get(eventId);
     const now = this.clock.now();
@@ -204,6 +210,10 @@ export class EventsService {
       return Array.from({ length: i.qty }, () => ({ unitId: new ObjectId(), typeId: t.typeId, name: t.name, price: t.price, status: 'held' as const, ticketId: null }));
     });
     const total = units.reduce((n, u) => n + u.price, 0);
+    // A paid event takes only what its organizer accepts (a free one has nothing to pay).
+    if (total > 0 && !(e.paymentMethods ?? [...PAYMENT_METHODS]).includes(input.method)) {
+      throw errors.validation(`Cet événement n’accepte pas ${TICKET_PAYMENT_LABELS[input.method]}.`, { field: 'method' });
+    }
     const holdExpiresAt = new Date(Math.min(now.getTime() + HOLD_MIN * MIN, e.salesCloseAt.getTime()));
 
     const created = await withTransaction(this.mongo, async (session) => {
@@ -219,16 +229,16 @@ export class EventsService {
         }
       }
       const bookingId = new ObjectId();
-      const payment = total > 0
+      const payment = total > 0 && !cash
         ? await this.payments.create(
-            { userId, purpose: 'event_booking', purposeRef: bookingId, amount: total, method: input.method, description: `${e.title} · ${units.length} billet${units.length > 1 ? 's' : ''}`, expiresAt: holdExpiresAt, returnUrl },
+            { userId, purpose: 'event_booking', purposeRef: bookingId, amount: total, method: input.method as PaymentMethod, description: `${e.title} · ${units.length} billet${units.length > 1 ? 's' : ''}`, expiresAt: holdExpiresAt, returnUrl },
             session,
           )
         : null;
       const booking: EventBookingDoc = { _id: bookingId, eventId, userId, units, total, method: input.method, status: 'held', holdExpiresAt, paymentId: payment?._id ?? null, createdAt: now, updatedAt: now };
       await this.bookings.insertOne(booking, { session });
-      // Free: nothing to pay, the tickets are issued now.
-      if (!payment) await this.confirm(booking, input.method, session);
+      // Free, or cash at the door: nothing to pay here, the tickets are issued now.
+      if (!payment) await this.confirm(booking, total > 0 ? input.method : cash ? 'wave' : input.method, session);
       return { booking, payment };
     });
     return { booking: created.booking, payment: created.payment ? await this.payments.openCheckout(created.payment, baseUrl) : null, replay: false };
@@ -293,7 +303,7 @@ export class EventsService {
    * One ticket per unit. The student travels on the first one unless they already hold one for this event; the
    * others are theirs to give to friends (the transfer makes them the friend's).
    */
-  private async confirm(b: EventBookingDoc, method: PaymentDoc['method'], session: ClientSession): Promise<'fulfilled' | 'unfulfillable'> {
+  private async confirm(b: EventBookingDoc, method: TicketPaymentMethod, session: ClientSession): Promise<'fulfilled' | 'unfulfillable'> {
     const e = (await this.events.findOne({ _id: b.eventId }, { session }))!;
     if (e.status !== 'published') return 'unfulfillable';
     let holderTravels = !(await this.ticketing.hasActiveTicket(e._id, b.userId, session));
@@ -430,6 +440,7 @@ export class EventsService {
       salesCloseAt,
       ticketTypes: input.ticketTypes.map((t) => ({ typeId: randomCode(6), name: t.name.trim(), description: t.description?.trim() || null, price: t.price, capacity: t.capacity, remaining: t.capacity })),
       maxPerStudent: input.maxPerStudent ?? 4,
+      paymentMethods: input.paymentMethods?.length ? [...new Set(input.paymentMethods)] : [...PAYMENT_METHODS],
     };
   }
 

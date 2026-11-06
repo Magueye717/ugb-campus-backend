@@ -108,6 +108,25 @@ describe('events', () => {
     expect((await ok(call(s, 'GET', `/events/${ev.id}`))).ticketTypes[1].remaining).toBe(2);
   });
 
+  it('the organizer chooses how to pay; cash at the door: tickets at once, nothing paid in the app', async () => {
+    const { owner, orgId, body } = await setup();
+    // Not said: Wave and Orange Money, as before.
+    const classic = await ok(call(owner, 'POST', `/org/${orgId}/events`, body), 201);
+    expect(classic.paymentMethods).toEqual(['wave', 'orange_money']);
+    const ev = await ok(call(owner, 'POST', `/org/${orgId}/events`, { ...body, paymentMethods: ['cash', 'wave'] }), 201);
+    await ok(call(owner, 'POST', `/org/${orgId}/events/${ev.id}/publish`));
+    const s = await registerStudent(t);
+    expect((await ok(call(s, 'GET', `/events/${ev.id}`))).paymentMethods).toEqual(['cash', 'wave']);
+    const [std] = ev.ticketTypes;
+    expect(json(await call(s, 'POST', `/events/${ev.id}/bookings`, { items: [{ typeId: std.typeId, qty: 1 }], method: 'orange_money' })).field).toBe('method');
+    const booked = await ok(call(s, 'POST', `/events/${ev.id}/bookings`, { items: [{ typeId: std.typeId, qty: 2 }], method: 'cash' }), 201);
+    expect(booked.payment).toBeNull();
+    expect(booked.booking.status).toBe('confirmed');
+    const ticket = await ok(call(s, 'GET', `/tickets/${booked.booking.tickets[0].ticketId}`));
+    expect(ticket).toMatchObject({ paidWith: 'cash', cashDue: 2000 });
+    expect(await t.c.mongo.db.collection('payments').countDocuments({ userId: new ObjectId(s.userId) })).toBe(0);
+  });
+
   it('a free event issues its tickets at once', async () => {
     const { owner, orgId, body } = await setup({ free: true });
     const ev = await ok(call(owner, 'POST', `/org/${orgId}/events`, { ...body, title: 'Conférence IA', category: 'conference' }), 201);

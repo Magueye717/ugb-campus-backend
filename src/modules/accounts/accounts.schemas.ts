@@ -13,7 +13,7 @@ export const MeResponse = Type.Object({
   platformRoles: Type.Array(Type.String()),
   student: Nullable(
     Type.Object({
-      studentNumber: Type.String(),
+      studentNumber: Nullable(Type.String({ description: 'Null until the student gives it (profile, or their card).' })),
       campus: Type.String(),
       onCampus: Type.Boolean(),
       village: Nullable(Type.String()),

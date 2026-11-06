@@ -104,10 +104,24 @@ export type CatalogItemDoc = {
    * Such an item has no stock.
    */
   orderable: boolean;
+  /** Students who like it (a heart on the card): kept in step with `itemLikes`. */
+  likes: number;
   sortOrder: number;
   archivedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+};
+
+/** Students like a shop's articles; a restaurant's dishes have no heart. */
+export const LIKEABLE_KINDS: readonly BusinessKind[] = ['shop'];
+
+/** One student likes one article or dish (at most once): its heart is filled for them, its count includes them. */
+export type ItemLikeDoc = {
+  _id: ObjectId;
+  userId: ObjectId;
+  itemId: ObjectId;
+  businessId: ObjectId;
+  createdAt: Date;
 };
 
 /**
@@ -150,6 +164,11 @@ export type OrderDoc = {
   createdAt: Date;
   updatedAt: Date;
 };
+
+/** « Mes ventes »: the longest period asked at once (a year, and a leap day). */
+export const SALES_MAX_DAYS = 366;
+/** « Mes ventes »: the best sellers listed. */
+export const SALES_TOP_ITEMS = 5;
 
 /** Time to pay before the order (and the stock it holds) goes back. */
 export const ORDER_PAY_WITHIN_MIN = 15;

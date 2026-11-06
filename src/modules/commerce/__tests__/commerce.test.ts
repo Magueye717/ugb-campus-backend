@@ -217,6 +217,28 @@ describe('shops', () => {
     expect(await ok(call(owner, 'PATCH', `/org/${orgId}/${sp}/catalog/${print.id}`, { orderable: true }))).toMatchObject({ orderable: true });
     await ok(call(s, 'POST', `/businesses/${b.id}/orders`, { lines: [{ itemId: print.id, qty: 1 }], mode: 'pickup', method: 'wave' }), 201);
   });
+
+  it('« Intéressé » on a service done on the spot: the shop is told who (with the phone), once; never for an orderable article', async () => {
+    const { b, owner, orgId, sp } = await business('shop');
+    const print = await ok(call(owner, 'POST', `/org/${orgId}/${sp}/catalog`, { section: 'article', category: 'Services', name: 'Reliure', detail: 'Spirale', price: 500, orderable: false }), 201);
+    const pen = await ok(call(owner, 'POST', `/org/${orgId}/${sp}/catalog`, { section: 'article', category: 'Fournitures', name: 'Stylo', detail: 'Bleu', price: 150 }), 201);
+    const s = await registerStudent(t, { firstName: 'Mariama', lastName: 'Diallo' });
+    expect(await ok(call(s, 'PUT', `/items/${print.id}/interest`))).toEqual({ interested: true });
+    expect(await ok(call(s, 'PUT', `/items/${print.id}/interest`))).toEqual({ interested: true }); // twice: told once
+    expect((await ok(call(s, 'GET', `/businesses/${b.id}`))).items.find((i: { id: string }) => i.id === print.id).interested).toBe(true);
+    expect(json(await call(s, 'PUT', `/items/${pen.id}/interest`)).code).toBe('ORDERABLE');
+    expect(json(await call(owner, 'PUT', `/items/${print.id}/interest`)).code).toBe('OWN_BUSINESS');
+
+    const list = (await ok(call(owner, 'GET', `/org/${orgId}/${sp}/interests`))).items;
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ item: { name: 'Reliure' }, student: { name: 'Mariama Diallo' } });
+    expect(list[0].student.phone).toMatch(/^\d{2} \d{3} \d{2} \d{2}$/);
+    const told = await t.c.mongo.db.collection('notifications').countDocuments({ type: 'commerce.item_interest' });
+    expect(told).toBeGreaterThanOrEqual(1);
+
+    expect(await ok(call(s, 'DELETE', `/items/${print.id}/interest`))).toEqual({ interested: false });
+    expect((await ok(call(owner, 'GET', `/org/${orgId}/${sp}/interests`))).items).toEqual([]);
+  });
 });
 
 describe('one entity, several spaces', () => {
@@ -527,3 +549,91 @@ describe('student shops and owners', () => {
   });
 });
 
+
+describe('likes', () => {
+  it('a student likes an article once, sees it everywhere, takes it back; its own team cannot', async () => {
+    const { b, owner, orgId, sp } = await business('shop');
+    const cahier = await ok(call(owner, 'POST', `/org/${orgId}/${sp}/catalog`, { section: 'article', name: 'Cahier', price: 300 }), 201);
+    expect(cahier).toMatchObject({ likes: 0, liked: false });
+    const s = await registerStudent(t);
+    const other = await registerStudent(t);
+
+    expect(await ok(call(s, 'PUT', `/items/${cahier.id}/like`))).toEqual({ liked: true, likes: 1 });
+    // Twice counts once.
+    expect(await ok(call(s, 'PUT', `/items/${cahier.id}/like`))).toEqual({ liked: true, likes: 1 });
+    expect(await ok(call(other, 'PUT', `/items/${cahier.id}/like`))).toEqual({ liked: true, likes: 2 });
+
+    const mine = (items: { id: string }[]) => items.find((i) => i.id === cahier.id);
+    expect(mine((await ok(call(s, 'GET', `/businesses/${b.id}`))).items)).toMatchObject({ likes: 2, liked: true });
+    expect(mine((await ok(call(s, 'GET', '/market?kind=shop'))).items)).toMatchObject({ likes: 2, liked: true });
+    expect(mine((await ok(call(owner, 'GET', `/businesses/${b.id}`))).items)).toMatchObject({ likes: 2, liked: false });
+
+    expect(await ok(call(s, 'DELETE', `/items/${cahier.id}/like`))).toEqual({ liked: false, likes: 1 });
+    expect(await ok(call(s, 'DELETE', `/items/${cahier.id}/like`))).toEqual({ liked: false, likes: 1 });
+    expect(mine((await ok(call(s, 'GET', '/market?kind=shop'))).items)).toMatchObject({ likes: 1, liked: false });
+
+    expect(json(await call(owner, 'PUT', `/items/${cahier.id}/like`)).code).toBe('OWN_BUSINESS');
+    expect((await call(s, 'PUT', `/items/${new ObjectId().toHexString()}/like`)).statusCode).toBe(404);
+    expect((await ok(call(s, 'GET', `/businesses/${b.id}`))).itemLikes).toBe(true);
+  });
+
+  it('a restaurant’s dishes have no heart', async () => {
+    const r = await business('restaurant');
+    const mafe = await ok(call(r.owner, 'POST', `/org/${r.orgId}/${r.sp}/catalog`, { section: 'menu', name: 'Mafé yap', price: 1500 }), 201);
+    const s = await registerStudent(t);
+    expect((await ok(call(s, 'GET', `/businesses/${r.b.id}`))).itemLikes).toBe(false);
+    expect(json(await call(s, 'PUT', `/items/${mafe.id}/like`)).code).toBe('NOT_LIKEABLE');
+  });
+});
+
+describe('mes ventes', () => {
+  it('totals completed orders for a period: by method, by day, best sellers, what is still owed; the rest apart; managers only', async () => {
+    const { b, owner, orgId, sp } = await business('restaurant');
+    await ok(call(owner, 'PATCH', `/org/${orgId}/${sp}/business`, { paymentMethods: ['cash', 'wave'] }));
+    const staff = await createStaff(t);
+    await call(owner, 'PUT', `/org/${orgId}/${sp}/members`, { phone: staff.phone, roles: ['staff'] });
+    const mafe = await ok(call(owner, 'POST', `/org/${orgId}/${sp}/catalog`, { section: 'menu', name: 'Mafé yap', price: 1500 }), 201);
+    const bissap = await ok(call(owner, 'POST', `/org/${orgId}/${sp}/catalog`, { section: 'drink', name: 'Bissap', price: 300 }), 201);
+    const s = await registerStudent(t);
+    const order = (lines: { itemId: string; qty: number }[], method: 'cash' | 'wave') => ok(call(s, 'POST', `/businesses/${b.id}/orders`, { lines, mode: 'pickup', method }), 201);
+    const serve = async (id: string) => {
+      for (const step of ['accept', 'ready', 'complete']) await ok(call(owner, 'POST', `/org/${orgId}/${sp}/orders/${id}/${step}`));
+    };
+
+    // 31 Oct: two sales (cash, Wave), one refused, one still being served.
+    const cash = await order([{ itemId: mafe.id, qty: 2 }], 'cash');
+    await serve(cash.order.id);
+    const wave = await order([{ itemId: mafe.id, qty: 1 }], 'wave');
+    await pay(wave.payment.reference);
+    await serve(wave.order.id);
+    const refused = await order([{ itemId: bissap.id, qty: 4 }], 'cash');
+    await ok(call(owner, 'POST', `/org/${orgId}/${sp}/orders/${refused.order.id}/refuse`, { reason: 'Plus de bissap.' }));
+    await order([{ itemId: bissap.id, qty: 1 }], 'cash');
+    // 1 Nov: one more.
+    t.clock.set(T0 + 24 * 3600_000);
+    const next = await order([{ itemId: bissap.id, qty: 1 }], 'cash');
+    await serve(next.order.id);
+
+    const sales = await ok(call(owner, 'GET', `/org/${orgId}/${sp}/sales?from=2026-10-31&to=2026-11-01`));
+    expect(sales).toMatchObject({
+      from: '2026-10-31', to: '2026-11-01', revenue: 4800, orders: 3, average: 1600,
+      methods: [{ method: 'cash', label: 'Espèces', amount: 3300, orders: 2 }, { method: 'wave', label: 'Wave', amount: 1500, orders: 1 }],
+      days: [{ date: '2026-10-31', revenue: 4500, orders: 2 }, { date: '2026-11-01', revenue: 300, orders: 1 }],
+      inProgress: 1, refused: 1, cancelled: 0,
+    });
+    expect(sales.top[0]).toEqual({ itemId: mafe.id, name: 'Mafé yap', qty: 3, revenue: 4500 });
+    // The Wave sale is paid out to the owner's number: owed until it arrives.
+    const payout = await t.c.mongo.db.collection('payouts').findOne({ _id: (await t.c.mongo.db.collection('commerceOrders').findOne({ _id: new ObjectId(wave.order.id) }))!.payoutId });
+    expect(sales.owed).toBe(payout!.status === 'succeeded' ? 0 : 1500);
+
+    // One day only, and a day with nothing.
+    expect(await ok(call(owner, 'GET', `/org/${orgId}/${sp}/sales?from=2026-11-01&to=2026-11-01`))).toMatchObject({ revenue: 300, orders: 1, days: [{ date: '2026-11-01', revenue: 300 }] });
+    expect(await ok(call(owner, 'GET', `/org/${orgId}/${sp}/sales?from=2026-10-01&to=2026-10-01`))).toMatchObject({ revenue: 0, orders: 0, average: 0, methods: [], top: [] });
+    // Bad periods, and the staff (they serve, they don't see the money).
+    expect((await call(owner, 'GET', `/org/${orgId}/${sp}/sales?from=2026-11-02&to=2026-11-01`)).statusCode).toBe(400);
+    expect((await call(owner, 'GET', `/org/${orgId}/${sp}/sales?from=2025-01-01&to=2026-11-01`)).statusCode).toBe(400);
+    expect((await call(owner, 'GET', `/org/${orgId}/${sp}/sales?from=31-10-2026&to=2026-11-01`)).statusCode).toBe(400);
+    // Not found for them, like the other managers-only pages.
+    expect((await call(staff, 'GET', `/org/${orgId}/${sp}/sales?from=2026-10-31&to=2026-11-01`)).statusCode).toBe(404);
+  });
+});

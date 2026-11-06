@@ -1,7 +1,6 @@
 import type { DataMigration } from '../../platform/db/migrations.js';
 import { bson, type CollectionSpec } from '../../platform/db/schema.js';
-import { PAYMENT_METHODS } from '../payments/index.js';
-import { TICKET_KINDS, TRANSFER_STATUSES } from './ticketing.types.js';
+import { TICKET_KINDS, TICKET_PAYMENT_METHODS, TRANSFER_STATUSES } from './ticketing.types.js';
 
 export const ticketingCollections: CollectionSpec[] = [
   {
@@ -19,7 +18,8 @@ export const ticketingCollections: CollectionSpec[] = [
           holderTravels: bson.bool,
           source: bson.object({ type: bson.enumOf(['caravan_booking', 'event_booking']), id: bson.objectId }, ['type', 'id']),
           price: bson.int({ minimum: 0 }),
-          paidWith: bson.enumOf(PAYMENT_METHODS),
+          paidWith: bson.enumOf(TICKET_PAYMENT_METHODS),
+          cashCollectedAt: bson.nullable(bson.date),
           seat: bson.nullable(bson.int({ minimum: 1 })),
           details: { bsonType: 'object' },
           status: bson.enumOf(['active', 'cancelled']),

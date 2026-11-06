@@ -17,7 +17,7 @@ export const ALERTS_SWEEP_QUEUE = 'alerts.sweep';
 
 /** Announcements' pictures and PDFs. The media module deletes a file once none of these reference it. */
 export const ALERTS_MEDIA_USAGE: MediaUsage[] = [
-  { collection: 'alerts', path: 'image.mediaId' },
+  { collection: 'alerts', path: 'images.mediaId' },
   { collection: 'alerts', path: 'attachment.mediaId' },
 ];
 

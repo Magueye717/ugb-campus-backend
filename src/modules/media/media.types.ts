@@ -22,6 +22,8 @@ export type MediaDoc = {
   height?: number;
   /** Documents: the file name shown to students ("Calendrier des examens.pdf"). */
   name?: string;
+  /** Documents: how many pages, when the PDF says so (read on upload). */
+  pages?: number;
   bytes: number;
   createdAt: Date;
   /** Last time the hourly sweep found it still attached somewhere: it is checked again a week later. */
@@ -29,7 +31,7 @@ export type MediaDoc = {
 };
 
 /** A document attached to something (an announcement): where it is, its name and size for the download button. */
-export type FileRef = { mediaId: ObjectId; url: string; name: string; bytes: number };
+export type FileRef = { mediaId: ObjectId; url: string; name: string; bytes: number; pages?: number | null };
 
 /** Where other modules keep picture references: a collection and the path of the `mediaId` (arrays included). */
 export type MediaUsage = { collection: string; path: string };

@@ -26,6 +26,18 @@ const cleanName = (raw: string | undefined) => {
   return base ? (base.toLowerCase().endsWith('.pdf') ? base : `${base}.pdf`) : 'document.pdf';
 };
 
+/**
+ * A PDF's page count, read from its page objects (or its page tree's count). Null when it can't be told (pages kept
+ * in compressed object streams): the app then just doesn't show it.
+ */
+export function pdfPages(input: Buffer): number | null {
+  const text = input.toString('latin1');
+  const pages = text.match(/\/Type\s*\/Page(?![a-zA-Z])/g)?.length ?? 0;
+  if (pages) return pages;
+  const counts = [...text.matchAll(/\/Type\s*\/Pages[^>]*?\/Count\s+(\d+)/g)].map((m) => Number(m[1]));
+  return counts.length ? Math.max(...counts) || null : null;
+}
+
 export class MediaService {
   private readonly media: Collection<MediaDoc>;
   private readonly usages: MediaUsage[] = [];
@@ -79,7 +91,8 @@ export class MediaService {
     const _id = new ObjectId();
     const key = `${purpose}/${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}/${_id.toHexString()}.pdf`;
     await this.storage.put(key, input, 'application/pdf');
-    const doc: MediaDoc = { _id, ownerId, purpose, key, url: this.storage.url(key, apiBase), contentType: 'application/pdf', name: cleanName(fileName), bytes: input.length, createdAt: now };
+    const pages = pdfPages(input);
+    const doc: MediaDoc = { _id, ownerId, purpose, key, url: this.storage.url(key, apiBase), contentType: 'application/pdf', name: cleanName(fileName), ...(pages ? { pages } : {}), bytes: input.length, createdAt: now };
     await this.media.insertOne(doc);
     return doc;
   }
@@ -88,7 +101,7 @@ export class MediaService {
   async claimDocument(ownerId: ObjectId, id: string): Promise<FileRef> {
     const m = ObjectId.isValid(id) ? await this.media.findOne({ _id: new ObjectId(id), ownerId, contentType: 'application/pdf' }) : null;
     if (!m) throw errors.validation('Document inconnu : envoie-le d’abord.', { field: 'attachmentId' });
-    return { mediaId: m._id, url: m.url, name: m.name ?? 'document.pdf', bytes: m.bytes };
+    return { mediaId: m._id, url: m.url, name: m.name ?? 'document.pdf', bytes: m.bytes, pages: m.pages ?? null };
   }
 
   /**

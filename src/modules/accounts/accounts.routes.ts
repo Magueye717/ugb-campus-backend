@@ -4,6 +4,7 @@ import type { ObjectId } from 'mongodb';
 import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
+import { errors } from '../../platform/http/errors.js';
 import { IdParams, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
 import type { AuditApi } from '../audit/index.js';
 import type { AccountsService } from './accounts.service.js';
@@ -41,6 +42,24 @@ export function registerAccountsRoutes(root: FastifyInstance, { service, audit, 
     await service.updateOrigin(me(req), req.body);
     return reply.status(204).send();
   });
+
+  app.put(
+    '/me/student-number',
+    {
+      preHandler: [requireAuth, requireStudent],
+      schema: {
+        tags: ['me'],
+        description: 'A student without a number gives it (optional at sign-up). Once set it does not change here.',
+        body: Type.Object({ studentNumber: Type.String({ minLength: 1, maxLength: 30 }) }, { additionalProperties: false }),
+      },
+    },
+    async (req, reply) => {
+      if ((await service.claimStudentNumber(me(req), req.body.studentNumber)) === 'has-other') {
+        throw errors.conflict('STUDENT_NUMBER_SET', 'Ton numéro étudiant est déjà enregistré : il ne se change pas ici. Écris à l’équipe UGB Campus en cas d’erreur.');
+      }
+      return reply.status(204).send();
+    },
+  );
 
   app.put('/me/identity', { preHandler: [requireAuth, requireStudent], schema: { tags: ['me'], description: 'Birth date, place of birth, nationality (optional).', body: IdentityBody } }, async (req, reply) => {
     await service.updateIdentity(me(req), req.body);

@@ -49,6 +49,8 @@ export type Standing = { strikes: number; limit: number; suspendedUntil: Date | 
 
 export type TripView = {
   id: string;
+  /** Seats paid in the app; false: a reservation, the fare settled in the taxi. */
+  payOnline: boolean;
   from: string;
   to: string;
   departureAt: string;
@@ -202,6 +204,7 @@ export class TaxiService {
   async create(userId: ObjectId, input: NewTrip): Promise<{ trip: TaxiTripDoc; replay: boolean }> {
     await this.limiter.hit(`taxi:create:${userId.toHexString()}`, { limit: 10, windowS: 3600 }, 'Trop de trajets proposés. Réessaie plus tard.');
     await this.assertNotSuspended(userId);
+    await this.releaseIfStale(userId);
     const now = this.clock.now();
 
     if ((input.departureAt === undefined) === (input.leaveInMinutes === undefined)) {
@@ -242,6 +245,7 @@ export class TaxiService {
       departedAt: null,
       cancelledAt: null,
       claimPayoutId: null,
+      payOnline: this.config.TAXI_ONLINE_PAYMENT,
       createdAt: now,
       updatedAt: now,
     };
@@ -256,7 +260,7 @@ export class TaxiService {
           { session },
         );
         await this.syncChat(trip._id, session);
-        await this.say(trip._id, 'Trajet publié. La discussion est réservée aux passagers qui ont payé leur place.', session);
+        await this.say(trip._id, trip.payOnline ? 'Trajet publié. La discussion est réservée aux passagers qui ont payé leur place.' : 'Trajet publié. La discussion est réservée aux passagers qui ont réservé leur place.', session);
       });
       return { trip, replay: false };
     } catch (err) {
@@ -268,6 +272,16 @@ export class TaxiService {
       if (same) return { trip: current, replay: true };
       throw this.alreadyInTrip(current);
     }
+  }
+
+  /** Whether trips proposed now are paid in the app. */
+  get onlinePayment() {
+    return this.config.TAXI_ONLINE_PAYMENT;
+  }
+
+  /** Trips from before the setting were all paid. */
+  private paid(trip: Pick<TaxiTripDoc, 'payOnline'>) {
+    return trip.payOnline ?? true;
   }
 
   private alreadyInTrip(current: TaxiTripDoc | null) {
@@ -289,11 +303,16 @@ export class TaxiService {
    * Takes a seat for 10 minutes and opens the payment. The seat counter and the participant are written in one
    * transaction; the unique indexes stop a second seat in the same trip and a second active trip.
    */
-  async join(userId: ObjectId, tripId: ObjectId, input: { method: PaymentMethod; returnUrl?: string | null }, baseUrl: string) {
+  async join(userId: ObjectId, tripId: ObjectId, input: { method?: PaymentMethod; returnUrl?: string | null }, baseUrl: string) {
     await this.limiter.hit(`taxi:join:${userId.toHexString()}`, { limit: 30, windowS: 3600 });
-    this.payments.assertAvailable(input.method);
-    const returnUrl = this.payments.validateReturnUrl(input.returnUrl);
     await this.assertNotSuspended(userId);
+    await this.releaseIfStale(userId);
+    const target = await this.trips.findOne({ _id: tripId });
+    if (target && !this.paid(target)) return { ...(await this.reserve(userId, target)), payment: null };
+    if (!input.method) throw errors.validation('Choisis Wave ou Orange Money pour payer ta place.', { field: 'method' });
+    const method = input.method;
+    this.payments.assertAvailable(method);
+    const returnUrl = this.payments.validateReturnUrl(input.returnUrl);
 
     // A retry (or coming back to pay): the same hold and the same payment, not a second seat.
     const pending = await this.participants.findOne({ tripId, userId, status: 'pending_payment' });
@@ -321,7 +340,7 @@ export class TaxiService {
         if (!t) throw errors.conflict('TRIP_FULL', 'Ce trajet est complet.');
         const participantId = new ObjectId();
         const payment = await this.payments.create(
-          { userId, purpose: 'taxi_seat', purposeRef: participantId, amount: t.seatPrice, method: input.method, description: `Sunu Taxi · ${t.from} → ${t.to}`, expiresAt: holdExpiresAt, returnUrl },
+          { userId, purpose: 'taxi_seat', purposeRef: participantId, amount: t.seatPrice, method, description: `Sunu Taxi · ${t.from} → ${t.to}`, expiresAt: holdExpiresAt, returnUrl },
           session,
         );
         await this.participants.insertOne(
@@ -339,6 +358,42 @@ export class TaxiService {
       throw err;
     }
     return { trip: result.trip, payment: await this.payments.openCheckout(result.payment, baseUrl), replay: false };
+  }
+
+  /**
+   * A trip without payment in the app: the seat is taken at once (no hold, nothing to pay here), the organizer is told
+   * and the student joins the chat. The fare is settled in the taxi.
+   */
+  private async reserve(userId: ObjectId, trip: TaxiTripDoc): Promise<{ trip: TaxiTripDoc; replay: boolean }> {
+    const now = this.clock.now();
+    if (trip.status !== 'open' || trip.departureAt <= now) throw tripClosed();
+    const mine = await this.participants.findOne({ tripId: trip._id, userId, active: true });
+    if (mine) return { trip, replay: true };
+    let result!: TaxiTripDoc;
+    try {
+      await withTransaction(this.mongo, async (session) => {
+        const t = await this.trips.findOneAndUpdate(
+          { _id: trip._id, status: 'open', departureAt: { $gt: now }, $expr: { $lt: ['$seatsTaken', '$seats'] } },
+          { $inc: { seatsTaken: 1, joinSeq: 1 }, $set: { updatedAt: now } },
+          { returnDocument: 'after', session },
+        );
+        if (!t) throw errors.conflict('TRIP_FULL', 'Ce trajet est complet.');
+        const p: TaxiParticipantDoc = {
+          _id: new ObjectId(), tripId: trip._id, userId, role: 'passenger', status: 'joined', joinOrder: t.joinSeq, paymentId: null, holdExpiresAt: null,
+          joinedAt: now, checkedInAt: null, leftAt: null, forfeited: false, active: true, activeTrip: true, createdAt: now, updatedAt: now,
+        };
+        await this.participants.insertOne(p, { session });
+        await this.syncChat(trip._id, session);
+        await this.say(trip._id, `${await this.firstName(userId)} a réservé une place`, session);
+        await this.tellOrganizerJoined(p, session);
+        result = t;
+      });
+    } catch (err) {
+      if (isDuplicateKey(err, 'user_active_trip_unique')) throw this.alreadyInTrip(await this.activeTripOf(userId));
+      if (isDuplicateKey(err, 'trip_user_active_unique')) throw errors.conflict('ALREADY_JOINED', 'Tu as déjà une place dans ce trajet.');
+      throw err;
+    }
+    return { trip: result, replay: false };
   }
 
   /** Called by payments, inside its transaction, when a seat payment succeeds or ends without money. */
@@ -396,6 +451,8 @@ export class TaxiService {
     const p = await this.participants.findOne({ tripId, userId, active: true });
     const trip = await this.trips.findOne({ _id: tripId });
     if (!p || !trip) throw notIn();
+    // A reservation: nothing paid, nothing to refund, and the seat always reopens.
+    if (!this.paid(trip)) return { refundAmount: 0, locked: false };
     const locked = this.clock.now() >= trip.lockAt;
     return { refundAmount: p.status === 'joined' && p.role === 'passenger' && !locked ? trip.seatPrice : 0, locked };
   }
@@ -420,6 +477,14 @@ export class TaxiService {
         return { refundAmount: 0, forfeited: false };
       }
 
+      // A reservation: the seat reopens, whenever they leave.
+      if (!this.paid(trip)) {
+        await this.participants.updateOne({ _id: p._id, status: 'joined' }, { $set: { status: 'left', ...gone } }, { session });
+        await this.trips.updateOne({ _id: tripId }, { $inc: { seatsTaken: -1 }, $set: { updatedAt: now } }, { session });
+        await this.say(tripId, `${await this.firstName(userId)} a annulé sa réservation`, session);
+        await this.syncChat(tripId, session);
+        return { refundAmount: 0, forfeited: false };
+      }
       const refundable = now < trip.lockAt;
       await this.participants.updateOne({ _id: p._id, status: 'joined' }, { $set: { status: 'left', forfeited: !refundable, ...gone } }, { session });
       await this.say(tripId, `${await this.firstName(userId)} a quitté le trajet`, session);
@@ -461,20 +526,22 @@ export class TaxiService {
         throw exists ? tripClosed() : errors.notFound('Trajet introuvable.');
       }
       const people = await this.participants.find({ tripId, $or: [{ active: true }, { forfeited: true }] }, { session }).toArray();
+      const online = this.paid(trip);
+      // Paid seats, or (without payment in the app) the reservations.
       const paid = people.filter((p) => p.role === 'passenger' && (p.status === 'joined' || p.forfeited));
-      for (const p of paid) payoutIds.push(await this.refund(p, trip, 'taxi_cancelled', 'cancel', session));
+      if (online) for (const p of paid) payoutIds.push(await this.refund(p, trip, 'taxi_cancelled', 'cancel', session));
       await this.notifications.notify(
         paid.map((p) => p.userId),
         {
-          type: 'taxi.cancelled', category: 'paiements', icon: 'car-outline', tone: 'danger', url: null, dedupeKey: `taxi:${tripId.toHexString()}:cancelled`,
-          title: 'Trajet Sunu Taxi annulé', body: `${trip.from} → ${trip.to} · ta place est remboursée à 100 %.`,
+          type: 'taxi.cancelled', category: online ? 'paiements' : 'social', icon: 'car-outline', tone: 'danger', url: null, dedupeKey: `taxi:${tripId.toHexString()}:cancelled`,
+          title: 'Trajet Sunu Taxi annulé', body: online ? `${trip.from} → ${trip.to} · ta place est remboursée à 100 %.` : `${trip.from} → ${trip.to} · ta réservation est annulée.`,
         },
         session,
       );
       for (const p of people) if (p.status === 'pending_payment' && p.paymentId) await this.payments.cancelInSession(p.paymentId, session);
       await this.participants.updateMany({ tripId, status: 'pending_payment' }, { $set: { status: 'expired', holdExpiresAt: null } }, { session });
       await this.participants.updateMany({ tripId, $or: [{ active: true }, { activeTrip: true }] }, { $set: { active: false, activeTrip: false, updatedAt: now } }, { session });
-      await this.say(tripId, 'Trajet annulé par l’organisateur. Les places payées sont remboursées à 100 %.', session);
+      await this.say(tripId, online ? 'Trajet annulé par l’organisateur. Les places payées sont remboursées à 100 %.' : 'Trajet annulé par l’organisateur.', session);
       await this.syncChat(tripId, session);
       const strike = now >= trip.lockAt && paid.length > 0;
       if (strike) await this.strikes.insertOne({ _id: new ObjectId(), userId, tripId, reason: 'late_cancel', at: now }, { session });
@@ -505,14 +572,14 @@ export class TaxiService {
       );
       await this.participants.updateOne({ _id: next._id }, { $set: { role: 'organizer', updatedAt: now } }, { session });
       await this.trips.updateOne({ _id: tripId }, { $set: { organizerUserId: next.userId, updatedAt: now }, $inc: { seatsTaken: -1 } }, { session });
-      payoutIds.push(await this.refund(next, trip, 'taxi_handover', 'handover', session));
+      if (this.paid(trip)) payoutIds.push(await this.refund(next, trip, 'taxi_handover', 'handover', session));
       await this.syncChat(tripId, session);
       await this.say(tripId, `${await this.firstName(userId)} a passé le relais. ${await this.firstName(next.userId)} organise maintenant le trajet.`, session);
       await this.notifications.notify(
         [next.userId],
         {
           type: 'taxi.handover', category: 'social', icon: 'car-outline', tone: 'warning', url: `/taxi/${tripId.toHexString()}`, dedupeKey: `taxi:${tripId.toHexString()}:handover:${next._id.toHexString()}`,
-          title: 'Tu organises maintenant le trajet', body: `${trip.from} → ${trip.to} · ta place t’est remboursée, c’est toi qui paies le taxi.`,
+          title: 'Tu organises maintenant le trajet', body: this.paid(trip) ? `${trip.from} → ${trip.to} · ta place t’est remboursée, c’est toi qui paies le taxi.` : `${trip.from} → ${trip.to} · c’est toi qui organises, et qui paies le taxi.`,
         },
         session,
       );
@@ -573,6 +640,7 @@ export class TaxiService {
     await withTransaction(this.mongo, async (session) => {
       const trip = await this.trips.findOne({ _id: tripId, organizerUserId: userId }, { session });
       if (!trip) throw errors.notFound('Trajet introuvable.');
+      if (!this.paid(trip)) throw errors.rule('NOTHING_TO_CLAIM', 'Les places de ce trajet se règlent dans le taxi : rien à récupérer dans l’app.');
       if (trip.status !== 'departed') throw errors.conflict('TRIP_NOT_DEPARTED', 'Confirme d’abord le départ (« On est partis »).');
       const paid = await this.participants.countDocuments({ tripId, role: 'passenger', $or: [{ status: 'joined' }, { forfeited: true }] }, { session });
       if (paid === 0) throw errors.rule('NOTHING_TO_CLAIM', 'Aucun passager n’a payé de place sur ce trajet.');
@@ -595,9 +663,24 @@ export class TaxiService {
     const stale = await this.trips
       .find({ status: 'open', departureAt: { $lt: new Date(now.getTime() - TAXI_GRACE_MIN * MIN), $gt: new Date(now.getTime() - 2 * DAY) } }, { projection: { _id: 1 } })
       .toArray();
-    if (!stale.length) return 0;
-    const res = await this.participants.updateMany({ tripId: { $in: stale.map((t) => t._id) }, activeTrip: true }, { $set: { activeTrip: false, updatedAt: now } });
+    return this.release(stale.map((t) => t._id), now);
+  }
+
+  private async release(tripIds: ObjectId[], now: Date) {
+    if (!tripIds.length) return 0;
+    const res = await this.participants.updateMany({ tripId: { $in: tripIds }, activeTrip: true }, { $set: { activeTrip: false, updatedAt: now } });
     return res.modifiedCount;
+  }
+
+  /**
+   * Before proposing or joining a trip: a trip of mine past its time (and its 15 minutes' grace) that never left is
+   * over. It no longer blocks me, even if the worker's sweep hasn't run yet (it's also off the board by then: without
+   * this, the student could neither see it nor start another one).
+   */
+  private async releaseIfStale(userId: ObjectId) {
+    const now = this.clock.now();
+    const current = await this.activeTripOf(userId);
+    if (current && current.status === 'open' && current.departureAt.getTime() < now.getTime() - TAXI_GRACE_MIN * MIN) await this.release([current._id], now);
   }
 
   // ---- Reads ----------------------------------------------------------------------------------------------------
@@ -659,7 +742,7 @@ export class TaxiService {
           if (pay) payment = { reference: pay.reference, checkoutUrl: pay.checkoutUrl, expiresAt: pay.expiresAt.toISOString() };
         }
         let claim: TripView['claim'] = null;
-        if (isOrganizer && t.status === 'departed') {
+        if (isOrganizer && t.status === 'departed' && this.paid(t)) {
           const paid = inTrip.filter((p) => p.role === 'passenger' && (p.status === 'joined' || p.forfeited)).length;
           const payout = t.claimPayoutId ? await this.payments.findPayout(t.claimPayoutId) : null;
           claim = { amount: paid * t.seatPrice, payout: payout ? { id: payout._id.toHexString(), status: payout.status, amount: payout.amount } : null };
@@ -675,6 +758,7 @@ export class TaxiService {
           seatsTaken: t.seatsTaken,
           fare: t.fare,
           seatPrice: t.seatPrice,
+          payOnline: this.paid(t),
           status: t.status,
           organizer: { ...person(t.organizerUserId), trips: countOf(tripCounts, t.organizerUserId), lateCancels: countOf(strikeCounts, t.organizerUserId) },
           passengers,

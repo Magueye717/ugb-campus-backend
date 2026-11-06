@@ -44,11 +44,31 @@ export const commerceCollections: CollectionSpec[] = [
           stock: bson.nullable(bson.int({ minimum: 0 })),
           available: bson.bool,
           orderable: bson.bool,
+          likes: bson.int({ minimum: 0 }),
         },
-        ['businessId', 'section', 'category', 'name', 'detail', 'price', 'photos', 'stock', 'available', 'orderable', 'sortOrder', 'archivedAt', 'createdAt', 'updatedAt'],
+        ['businessId', 'section', 'category', 'name', 'detail', 'price', 'photos', 'stock', 'available', 'orderable', 'likes', 'sortOrder', 'archivedAt', 'createdAt', 'updatedAt'],
       ),
     },
     indexes: [{ key: { businessId: 1, archivedAt: 1, sortOrder: 1 }, options: { name: 'catalog' } }],
+  },
+  {
+    name: 'itemLikes',
+    validator: {
+      $jsonSchema: bson.object({ userId: bson.objectId, itemId: bson.objectId, businessId: bson.objectId }, ['userId', 'itemId', 'businessId', 'createdAt']),
+    },
+    // One like per student and article; also finds which of the articles on screen they like.
+    indexes: [{ key: { userId: 1, itemId: 1 }, options: { name: 'user_item_unique', unique: true } }],
+  },
+  {
+    // « Intéressé » on an article done on the spot (printing…): the shop calls the student back.
+    name: 'itemInterests',
+    validator: {
+      $jsonSchema: bson.object({ userId: bson.objectId, itemId: bson.objectId, businessId: bson.objectId }, ['userId', 'itemId', 'businessId', 'createdAt']),
+    },
+    indexes: [
+      { key: { userId: 1, itemId: 1 }, options: { name: 'user_item_unique', unique: true } },
+      { key: { businessId: 1, createdAt: -1 }, options: { name: 'business_recent' } },
+    ],
   },
   {
     name: 'commerceOrders',
@@ -73,6 +93,8 @@ export const commerceCollections: CollectionSpec[] = [
       { key: { code: 1 }, options: { name: 'code_unique', unique: true } },
       { key: { userId: 1, createdAt: -1 }, options: { name: 'mine' } },
       { key: { businessId: 1, status: 1, createdAt: -1 }, options: { name: 'business_queue' } },
+      // « Mes ventes »: a business's orders over a period.
+      { key: { businessId: 1, createdAt: 1 }, options: { name: 'business_sales' } },
       { key: { status: 1, updatedAt: 1 }, options: { name: 'sweep' } },
     ],
   },
@@ -130,6 +152,13 @@ export const commerceMigrations: DataMigration[] = [
     description: 'A student’s shop takes cash only until the team verifies it: Wave and Orange Money are taken off, cash stays.',
     async up(db) {
       await db.collection('businesses').updateMany({ byStudent: true, onlinePayments: { $exists: false } }, { $set: { onlinePayments: false, paymentMethods: ['cash'] } });
+    },
+  },
+  {
+    id: '2026-11-05-catalog-likes',
+    description: 'Students may like an article or a dish: every item starts with 0 likes.',
+    async up(db) {
+      await db.collection('catalogItems').updateMany({ likes: { $exists: false } }, { $set: { likes: 0 } });
     },
   },
 ];

@@ -18,7 +18,7 @@ export const TokensSchema = Type.Object({
   refreshTokenExpiresAt: Type.String(),
 });
 
-export const CheckBody = Type.Object({ phone: PhoneInput, studentNumber: Type.String({ minLength: 1, maxLength: 30 }) }, { additionalProperties: false });
+export const CheckBody = Type.Object({ phone: PhoneInput, studentNumber: Type.Optional(Type.Union([Type.String({ maxLength: 30 }), Type.Null()], { description: 'Optional: checked only when given.' })) }, { additionalProperties: false });
 export const CheckResponse = Type.Object({
   available: Type.Boolean(),
   conflict: Type.Optional(Type.Union([Type.Literal('phone'), Type.Literal('student_number')])),
@@ -39,7 +39,7 @@ export const VerifyResponse = Type.Object({ verificationToken: Type.String() });
 export const RegisterBody = Type.Object(
   {
     verificationToken: Type.String({ minLength: 10, maxLength: 2000 }),
-    studentNumber: Type.String({ minLength: 1, maxLength: 30, description: 'P then digits, 12 characters at most once spaces are removed.' }),
+    studentNumber: Type.Optional(Type.Union([Type.String({ maxLength: 30 }), Type.Null()], { description: 'Optional (added later on the profile): P then digits, 12 characters at most once spaces are removed.' })),
     firstName: Type.String({ minLength: 1, maxLength: 60 }),
     lastName: Type.String({ minLength: 1, maxLength: 60 }),
     campus: CampusSchema,

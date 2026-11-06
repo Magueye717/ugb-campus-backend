@@ -6,9 +6,9 @@ import { actorOf, requireAuth } from '../../platform/auth/auth.js';
 import { IdParams, Nullable, ObjectIdString, toObjectId } from '../../platform/http/schemas.js';
 import { CAMPUSES, REGIONS, UFR_CODES, type AudienceProfile } from '../accounts/index.js';
 import type { AuditApi } from '../audit/index.js';
-import type { MediaApi } from '../media/index.js';
+import { MAX_UPLOAD_BYTES, type MediaApi } from '../media/index.js';
 import { alertView, type AlertsService, type Editor } from './alerts.service.js';
-import { ALERT_PLACEMENTS, ALERT_TONES, type AlertInput } from './alerts.types.js';
+import { ALERT_MAX_IMAGES, ALERT_PLACEMENTS, ALERT_TONES, type AlertInput } from './alerts.types.js';
 
 
 export const AlertView = Type.Object({
@@ -19,8 +19,14 @@ export const AlertView = Type.Object({
   title: Type.String(),
   body: Type.String(),
   details: Type.String({ description: 'The whole text, on the announcement’s page ("" when none).' }),
-  image: Nullable(Type.String({ description: 'A picture (poster, timetable), on its page.' })),
-  attachment: Nullable(Type.Object({ url: Type.String(), name: Type.String(), bytes: Type.Number() }, { description: 'A PDF to open or download.' })),
+  images: Type.Array(Type.String(), { description: `Photos (poster, timetable), up to ${ALERT_MAX_IMAGES}. Never with a PDF.` }),
+  image: Nullable(Type.String({ description: 'Deprecated: the first of `images` (apps before multiple photos).' })),
+  attachment: Nullable(
+    Type.Object(
+      { url: Type.String(), label: Type.String({ description: 'What it is ("Liste des admis"; default "Document officiel").' }), bytes: Type.Number(), pages: Nullable(Type.Integer()) },
+      { description: 'A PDF to open or download. Never with photos.' },
+    ),
+  ),
   icon: Type.String({ description: 'Ionicons name.' }),
   tone: Type.String({ description: 'info | warning | danger (urgent, shown in red) | success' }),
   href: Nullable(Type.String({ description: 'App route opened on tap; null: display only.' })),
@@ -34,6 +40,9 @@ export const AlertView = Type.Object({
 });
 const AdminAlertView = Type.Object({
   ...AlertView.properties,
+  attachment: Nullable(Type.Object({ url: Type.String(), label: Type.String(), bytes: Type.Number(), pages: Nullable(Type.Integer()), name: Type.String({ description: 'Its file name, for the team.' }) })),
+  attachmentLabel: Nullable(Type.String({ description: 'The name the team gave it; null: the default.' })),
+  imageIds: Type.Array(Type.String(), { description: 'The ids of `images`, same order: send them back (imageIds) to keep them.' }),
   status: Type.String({ description: 'scheduled | live | ended | withdrawn' }),
   push: Type.Boolean(),
   pushedAt: Nullable(Type.String({ description: 'When the push left (when the alert went online).' })),
@@ -47,8 +56,11 @@ const Fields = {
   title: Type.String({ minLength: 3, maxLength: 80, description: '"Élections des délégués"' }),
   body: Type.String({ maxLength: 200, description: '"Vote jeudi 06 nov. · 8h-17h · salle polyvalente"' }),
   details: Type.Optional(Type.String({ maxLength: 3000, description: 'The whole text, on its page. Default "".' })),
+  imageIds: Type.Optional(Type.Array(ObjectIdString, { maxItems: ALERT_MAX_IMAGES, description: `Up to ${ALERT_MAX_IMAGES} uploaded photos (POST /media/images?purpose=alert), in order. Not with attachmentId. [] removes them.` })),
+  // Deprecated: one photo (apps before imageIds).
   imageId: Type.Optional(Nullable(ObjectIdString)),
   attachmentId: Type.Optional(Nullable(ObjectIdString)),
+  attachmentLabel: Type.Optional(Nullable(Type.String({ maxLength: 60, description: 'What students read for the PDF ("Liste des admis"). null or "": "Document officiel". Left out: unchanged.' }))),
   icon: Type.Optional(Type.String({ maxLength: 40, description: 'Ionicons name. Default megaphone-outline (headline) / warning-outline (banner).' })),
   tone: Type.Optional(Type.Enum(ALERT_TONES, { description: 'Default info (headline) / warning (banner).' })),
   href: Type.Optional(Nullable(Type.String({ maxLength: 200, pattern: '^/', description: 'App route opened on tap.' }))),
@@ -100,14 +112,18 @@ export function registerAlertsRoutes(root: FastifyInstance, { service, audit, re
       startsAt: b.startsAt ? new Date(b.startsAt as string) : now,
       endsAt: new Date(b.endsAt as string),
       push: !!b.push,
+      ...(b.attachmentLabel !== undefined ? { attachmentLabel: ((b.attachmentLabel as string | null) ?? '').trim() || null } : {}),
     };
   };
 
-  /** The picture and the PDF sent with it, the editor's own uploads. Undefined: not sent (an update keeps them). */
-  const files = async (b: { imageId?: string | null; attachmentId?: string | null }, e: Editor) => ({
-    ...(b.imageId !== undefined ? { image: b.imageId ? (await media.claim(e.userId, [b.imageId]))[0]! : null } : {}),
-    ...(b.attachmentId !== undefined ? { attachment: b.attachmentId ? await media.claimDocument(e.userId, b.attachmentId) : null } : {}),
-  });
+  /** The photos or the PDF sent with it, the editor's own uploads. Undefined: not sent (an update keeps them). */
+  const files = async (b: { imageIds?: string[]; imageId?: string | null; attachmentId?: string | null }, e: Editor) => {
+    const ids = b.imageIds ?? (b.imageId === undefined ? undefined : b.imageId ? [b.imageId] : []);
+    return {
+      ...(ids !== undefined ? { images: ids.length ? await media.claim(e.userId, [...new Set(ids)]) : [] } : {}),
+      ...(b.attachmentId !== undefined ? { attachment: b.attachmentId ? await media.claimDocument(e.userId, b.attachmentId) : null } : {}),
+    };
+  };
 
   // An announcement's page (from "À la une" or a push): only one this student sees now.
   app.get('/alerts/:id', { preHandler: requireAuth, schema: { tags, params: IdParams, response: { 200: AlertView } } }, async (req) =>
@@ -119,9 +135,13 @@ export function registerAlertsRoutes(root: FastifyInstance, { service, audit, re
     items: (await service.active(await audienceOf(actorOf(req).userId), toObjectId(actorOf(req).userId))).map(alertView),
   }));
 
-  app.get('/admin/alerts', { ...editor, schema: { tags, response: { 200: Type.Object({ items: Type.Array(AdminAlertView) }) } } }, async (req) => {
+  const Limits = Type.Object({
+    images: Type.Integer({ description: 'Most photos on one announcement.' }),
+    documentMb: Type.Number({ description: 'Largest PDF accepted, in MB (checked again on upload).' }),
+  });
+  app.get('/admin/alerts', { ...editor, schema: { tags, response: { 200: Type.Object({ items: Type.Array(AdminAlertView), limits: Limits }) } } }, async (req) => {
     const e = await who(req);
-    return { items: (await service.recent()).map((a) => service.adminView(a, e)) };
+    return { items: (await service.recent()).map((a) => service.adminView(a, e)), limits: { images: ALERT_MAX_IMAGES, documentMb: MAX_UPLOAD_BYTES / 1024 / 1024 } };
   });
 
   app.post(

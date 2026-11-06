@@ -15,7 +15,8 @@ type Ctx = { ip: string; requestId: string };
 
 export type RegisterInput = {
   verificationToken: string;
-  studentNumber: string;
+  /** Optional: can be added later on the profile. */
+  studentNumber?: string | null;
   firstName: string;
   lastName: string;
   campus: Campus;
@@ -52,9 +53,9 @@ export class AuthService {
   ) {}
 
   /** Step 1 of sign-up ("Ce compte existe déjà"). Rate-limited by route: it necessarily tells whether a number is taken. */
-  async checkAvailability(input: { phone: string; studentNumber: string }) {
+  async checkAvailability(input: { phone: string; studentNumber?: string | null }) {
     const phone = this.accounts.phoneOrThrow(input.phone);
-    const studentNumber = this.accounts.normalizeStudentNumber(input.studentNumber);
+    const studentNumber = input.studentNumber?.trim() ? this.accounts.normalizeStudentNumber(input.studentNumber) : null;
     return this.accounts.availability(phone, studentNumber);
   }
 
@@ -75,7 +76,7 @@ export class AuthService {
     input = { ...input, password: input.password.trim() };
     const problem = passwordProblem(input.password);
     if (problem) throw errors.validation(problem, { field: 'password' });
-    const studentNumber = this.accounts.normalizeStudentNumber(input.studentNumber);
+    const studentNumber = input.studentNumber?.trim() ? this.accounts.normalizeStudentNumber(input.studentNumber) : null;
     const firstName = this.accounts.normalizeName(input.firstName, 'firstName');
     const lastName = this.accounts.normalizeName(input.lastName, 'lastName');
     const residence = this.accounts.residence({ campus: input.campus, onCampus: input.onCampus, village: input.village, room: input.room });

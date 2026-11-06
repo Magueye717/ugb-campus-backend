@@ -38,6 +38,8 @@ export type TicketView = {
   seat: number | null;
   price: number;
   paidWith: TicketDoc['paidWith'];
+  /** Cash: what is still to hand over at boarding / the door (0 once collected, or paid in the app). */
+  cashDue: number;
   event: EventSummary;
   details: Record<string, unknown>;
   /** Who travels on it when it isn't the holder: the companion the purchaser booked for. */
@@ -90,6 +92,8 @@ export type ScanResult = {
   companionOf: string | null;
   /** The purchaser's other valid tickets on this event ("Groupe : 2 billets"), to board them together. */
   group: ScanGroup | null;
+  /** Paid in cash: the amount to take now (0: nothing to collect). */
+  cashDue: number;
 };
 
 export type ScanGroup = { size: number; purchaser: string; others: { ticketId: string; seat: number | null; name: string; admitted: boolean }[] };
@@ -150,6 +154,7 @@ export class TicketingService {
       status: 'active',
       version: 1,
       admittedAt: null,
+      ...(input.paidWith === 'cash' ? { cashCollectedAt: null } : {}),
       cancellation: null,
       createdAt: now,
       updatedAt: now,
@@ -204,12 +209,15 @@ export class TicketingService {
     return new Map(rows.map((r) => [r._id.toHexString(), { booked: r.booked, buyers: r.buyers, admitted: r.admitted }]));
   }
 
-  /** What the organizer collects after the event: valid tickets, plus the fees kept on late cancellations. */
+  /**
+   * What the organizer collects after the event: valid tickets paid in the app, plus the fees kept on late
+   * cancellations. Cash tickets aren't in it: the organizer took that money themselves.
+   */
   async revenue(eventId: ObjectId, session?: ClientSession) {
     const [row] = await this.tickets
       .aggregate<{ tickets: number; fees: number }>(
         [
-          { $match: { eventId } },
+          { $match: { eventId, paidWith: { $ne: 'cash' } } },
           {
             $group: {
               _id: null,
@@ -256,6 +264,7 @@ export class TicketingService {
           seat: t.seat,
           price: t.price,
           paidWith: t.paidWith,
+          cashDue: t.paidWith === 'cash' && !t.cashCollectedAt && t.status === 'active' ? t.price : 0,
           event: p.event,
           details: p.details,
           passenger: t.passenger && holder ? { name: t.passenger.name, phone: t.passenger.phone } : null,
@@ -265,7 +274,7 @@ export class TicketingService {
           cancellation: t.cancellation && holder
             ? { at: t.cancellation.at.toISOString(), fee: t.cancellation.fee, refundAmount: t.cancellation.refundAmount, reason: t.cancellation.reason }
             : null,
-          cancellationQuote: active ? await this.handler(t.kind).cancellationQuote(t, now) : null,
+          cancellationQuote: active ? await this.quote(t, now) : null,
           transferDeadline: active ? (await this.handler(t.kind).transferDeadline(t)).toISOString() : null,
           transfer: x ? this.transferView(x, people) : null,
         };
@@ -308,12 +317,18 @@ export class TicketingService {
 
   // ---- Cancellation --------------------------------------------------------------------------------------------
 
+  /** The kind's quote; a cash ticket costs nothing to cancel and refunds nothing (nothing was paid in the app). */
+  private async quote(t: TicketDoc, now: Date): Promise<CancellationQuote> {
+    const q = await this.handler(t.kind).cancellationQuote(t, now);
+    return t.paidWith === 'cash' && q.allowed ? { ...q, fee: 0, refund: 0 } : q;
+  }
+
   /** The holder cancels: refunded to their own payout number (decision Q-3), minus the kind's fee. */
   async cancel(ticketId: ObjectId, userId: ObjectId) {
     const t = await this.tickets.findOne({ _id: ticketId, holderUserId: userId });
     if (!t) throw errors.notFound('Billet introuvable.');
     if (t.status !== 'active') throw errors.conflict('TICKET_NOT_ACTIVE', 'Ce billet est déjà annulé.');
-    const quote = await this.handler(t.kind).cancellationQuote(t, this.clock.now());
+    const quote = await this.quote(t, this.clock.now());
     if (!quote.allowed) throw errors.rule('CANCELLATION_REFUSED', quote.reason);
 
     const payoutIds: ObjectId[] = [];
@@ -344,13 +359,16 @@ export class TicketingService {
       { returnDocument: 'after', session },
     );
     if (!t) return null;
+    // Cash: nothing was paid in the app, nothing goes back (and no fee).
+    if (t.paidWith === 'cash') c = { ...c, refund: 0, fee: 0 };
     let payoutId: ObjectId | null = null;
     if (c.refund > 0) {
       const payout = await this.payments.createPayout(
         {
           kind: 'refund',
           beneficiaryUserId: t.holderUserId,
-          method: t.paidWith,
+          // Never cash here (refund is 0 for cash tickets, above).
+          method: t.paidWith === 'cash' ? 'wave' : t.paidWith,
           amount: c.refund,
           reason: c.reason === 'holder_cancelled' ? 'ticket_cancelled' : c.reason === 'min_not_reached' ? 'min_not_reached' : 'event_cancelled',
           source: { type: 'ticket', id: t._id },
@@ -373,7 +391,7 @@ export class TicketingService {
           type: `ticket.${c.reason}`, category: 'paiements', icon: 'close-circle-outline', tone: 'danger', url: `/billet/${t._id.toHexString()}`,
           dedupeKey: `ticket:${t._id.toHexString()}:cancelled`,
           title: c.reason === 'min_not_reached' ? 'Départ annulé : pas assez de passagers' : `Annulé par l’organisateur${event ? ` : ${event.title}` : ''}`,
-          body: `${event ? `${event.title}, ${dakar.format(new Date(event.startsAt))}. ` : ''}${fcfa} remboursés sur ton numéro.`,
+          body: `${event ? `${event.title}, ${dakar.format(new Date(event.startsAt))}. ` : ''}${t.paidWith === 'cash' ? 'Ta réservation est annulée : rien à payer.' : `${fcfa} remboursés sur ton numéro.`}`,
         },
         session,
       );
@@ -585,7 +603,7 @@ export class TicketingService {
     };
     const reject = async (reason: string, title: string, text: string, t: TicketDoc | null = null): Promise<ScanResult> => {
       await this.record({ ...base, ticketId: t?._id ?? null, eventId: t?.eventId ?? null, result: 'rejected', reason, active: false });
-      return { result: 'rejected', tone: 'danger', title, text, reason, eventId: t && t.orgId.equals(orgId) ? t.eventId.toHexString() : null, ticket: null, holder: null, companionOf: null, group: null };
+      return { result: 'rejected', tone: 'danger', title, text, reason, eventId: t && t.orgId.equals(orgId) ? t.eventId.toHexString() : null, ticket: null, holder: null, companionOf: null, group: null, cashDue: 0 };
     };
 
     // 1. Which ticket
@@ -634,15 +652,18 @@ export class TicketingService {
       return {
         result: 'duplicate', tone: 'warning', title: labels.duplicate,
         text: `${who}. Vérifie qu’il n’y a pas deux personnes avec ce billet.`,
-        reason: 'already_admitted', eventId: t.eventId.toHexString(), ticket, ...people,
+        reason: 'already_admitted', eventId: t.eventId.toHexString(), ticket, cashDue: 0, ...people,
       };
     }
-    await this.tickets.updateOne({ _id: t._id }, { $set: { admittedAt: now, updatedAt: now } });
+    // Paid in cash: the money is taken now, at the scan (once: a voided then repeated scan doesn't ask again).
+    const cashDue = t.paidWith === 'cash' && !t.cashCollectedAt ? t.price : 0;
+    await this.tickets.updateOne({ _id: t._id }, { $set: { admittedAt: now, updatedAt: now, ...(cashDue ? { cashCollectedAt: now } : {}) } });
     await this.hub.publish(eventTopic(t.eventId), 'admission.updated', { ticketId: t._id.toHexString(), admitted: true });
+    const collect = cashDue ? `À encaisser : ${String(cashDue).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} FCFA en espèces.` : '';
     return {
-      result: 'admitted', tone: check.warning ? 'warning' : 'success', title: who,
-      text: [companionOf ? `Accompagnant de ${companionOf}.` : '', check.warning, ...check.notes].filter(Boolean).join(' '),
-      reason: null, eventId: t.eventId.toHexString(), ticket, ...people,
+      result: 'admitted', tone: check.warning || cashDue ? 'warning' : 'success', title: who,
+      text: [collect, companionOf ? `Accompagnant de ${companionOf}.` : '', check.warning, ...check.notes].filter(Boolean).join(' '),
+      reason: null, eventId: t.eventId.toHexString(), ticket, cashDue, ...people,
     };
   }
 
@@ -680,7 +701,7 @@ export class TicketingService {
     return {
       result: a.result, tone, title: t && p ? `${p.traveller}${t.seat ? ` · place ${t.seat}` : ''}` : 'Billet non valable', text: 'Scan déjà enregistré.',
       reason: a.reason, eventId: a.eventId?.toHexString() ?? null, ticket: t ? { id: t._id.toHexString(), code: t.code, seat: t.seat } : null,
-      holder: p ? { name: p.traveller } : null, companionOf: p?.companionOf ?? null, group: p?.group ?? null,
+      holder: p ? { name: p.traveller } : null, companionOf: p?.companionOf ?? null, group: p?.group ?? null, cashDue: 0,
     };
   }
 

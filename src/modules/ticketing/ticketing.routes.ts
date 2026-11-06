@@ -40,6 +40,7 @@ export const TicketView = Type.Object({
   seat: Nullable(Type.Number()),
   price: Type.Number(),
   paidWith: Type.String(),
+  cashDue: Type.Number({ description: 'Paid in cash: still to hand over at boarding / the door (0: nothing due).' }),
   event: EventSummaryView,
   details: Free,
   passenger: Nullable(Type.Object({ name: Type.String(), phone: Type.String() }, { description: 'Companion ticket: who travels on it (booked by the holder, no account needed).' })),
@@ -62,6 +63,7 @@ const ScanResultView = Type.Object({
   ticket: Nullable(Type.Object({ id: Type.String(), code: Type.String(), seat: Nullable(Type.Number()) })),
   holder: Nullable(Type.Object({ name: Type.String() }, { description: 'Who travels: the companion’s name on a companion ticket.' })),
   companionOf: Nullable(Type.String({ description: 'Companion ticket: the student who booked it.' })),
+  cashDue: Type.Number({ description: 'Paid in cash: the amount to take now, at this scan (0: nothing to collect).' }),
   group: Nullable(
     Type.Object(
       {

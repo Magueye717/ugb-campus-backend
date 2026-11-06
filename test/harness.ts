@@ -77,9 +77,9 @@ export const nextStudentNumber = () => `P${String(100000 + (process.pid % 500) *
 export const DEFAULT_PASSWORD = 'Bonjour2026';
 
 /** Runs the real sign-up: OTP request, verify (dev code 1234), register. */
-export async function registerStudent(t: TestApp, over: Partial<{ phone: string; studentNumber: string; password: string; campus: 'campus1' | 'campus2'; ufr: string; region: string; firstName: string; lastName: string }> = {}) {
+export async function registerStudent(t: TestApp, over: Partial<{ phone: string; /** null: signs up without one (optional). */ studentNumber: string | null; password: string; campus: 'campus1' | 'campus2'; ufr: string; region: string; firstName: string; lastName: string }> = {}) {
   const phone = over.phone ?? nextPhone();
-  const studentNumber = over.studentNumber ?? nextStudentNumber();
+  const studentNumber = over.studentNumber === null ? null : (over.studentNumber ?? nextStudentNumber());
   const otp = await t.app.inject({ method: 'POST', url: '/api/v1/auth/otp', payload: { phone, purpose: 'register' } });
   const { challengeId, devCode } = json(otp);
   // Development mode sends the fixed code back, so the app can show it.
@@ -90,14 +90,15 @@ export async function registerStudent(t: TestApp, over: Partial<{ phone: string;
     method: 'POST',
     url: '/api/v1/auth/register',
     payload: {
-      verificationToken, studentNumber, firstName: over.firstName ?? 'Awa', lastName: over.lastName ?? 'Diop', campus: over.campus ?? 'campus1', onCampus: true,
+      verificationToken, ...(studentNumber ? { studentNumber } : {}), firstName: over.firstName ?? 'Awa', lastName: over.lastName ?? 'Diop', campus: over.campus ?? 'campus1', onCampus: true,
       village: over.campus === 'campus2' ? 'Village H' : 'Village E', room: '214', ufr: over.ufr ?? 'SAT', region: over.region ?? 'Saint-Louis',
       password: over.password ?? DEFAULT_PASSWORD, termsVersion: '2026-01',
     },
   });
   if (res.statusCode !== 201) throw new Error(`register failed: ${res.statusCode} ${res.body}`);
   const body = json(res);
-  return { phone, studentNumber, userId: body.userId as string, tokens: body.tokens as { accessToken: string; refreshToken: string } };
+  // Typed as a string for the tests that sign up with one (the default); empty when signed up without.
+  return { phone, studentNumber: studentNumber ?? '', userId: body.userId as string, tokens: body.tokens as { accessToken: string; refreshToken: string } };
 }
 
 /** A staff account (no student profile) with a password and optional platform roles, logged in directly. */

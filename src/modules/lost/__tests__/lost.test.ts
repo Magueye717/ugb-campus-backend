@@ -86,10 +86,15 @@ describe('a found student card', () => {
     t.ocr.text = 'UNIVERSITE GASTON BERGER\nNom : NDIAYE\nPrénom : Fatou\n(numéro illisible)';
     const read = await ok(readCard(finder));
     expect(read.owner).toBeNull();
-    // The Fatou Ndiayes first (both names; namesakes are told apart by UFR, campus and number hint), the other Ndiayes after.
+    // Only the Fatou Ndiayes (both names on the card; namesakes are told apart by UFR, campus and number hint).
     expect(read.candidates[0].name).toBe('Fatou Ndiaye');
     expect(read.candidates.find((c: { ref: string }) => c.ref === fatou.userId)).toMatchObject({ name: 'Fatou Ndiaye', campus: 'Campus 2', village: 'Village H' });
-    expect(read.candidates.some((c: { name: string }) => c.name === 'Aminata Ndiaye')).toBe(true);
+    // Another Ndiaye shares one name only: not offered from a card (she still comes up when typing « ndiaye »).
+    expect(read.candidates.some((c: { name: string }) => c.name === 'Aminata Ndiaye')).toBe(false);
+
+    // The camera pointed at anything but a card (noise read as words): nobody is offered.
+    t.ocr.text = 'FALL NDIAYE\nwxq lmn\nTABLE';
+    expect(await ok(readCard(finder))).toMatchObject({ cardType: null, names: [], owner: null, candidates: [] });
 
     expect((await ok(call(finder, 'GET', '/lost/cards/search?q=fatou%20ndiaye'))).items.map((c: { ref: string }) => c.ref)).toContain(fatou.userId);
     // Pieces of names are enough: "ndiay" finds every Ndiaye.
@@ -211,5 +216,31 @@ describe('objects', () => {
     const photo = json(await t.app.inject({ method: 'POST', url: '/api/v1/media/images?purpose=lost', headers: { ...bearer(finder.tokens.accessToken), ...upload.headers }, payload: upload.payload }));
     const atOffice = await ok(call(finder, 'POST', '/lost/items', { status: 'found', category: 'phone', imageId: photo.id, where: 'Resto 1', when: 'today', holder: 'office' }), 201);
     expect(json(await call(owner, 'POST', `/lost/items/${atOffice.id}/claim`, { proof: 'Fond d’écran bleu' })).code).toBe('LOST_AT_OFFICE');
+  });
+});
+
+describe('student number given after sign-up', () => {
+  it('signs up without it, adds it on the profile once, or gets it from their own card; never someone else’s', async () => {
+    const put = (who: Who, studentNumber: string) => t.app.inject({ method: 'PUT', url: '/api/v1/me/student-number', headers: bearer(who.tokens.accessToken), payload: { studentNumber } });
+    const taken = await registerStudent(t);
+    const a = await registerStudent(t, { studentNumber: null, firstName: 'Ndeye', lastName: 'Gaye' });
+    expect((await ok(call(a, 'GET', '/me'))).student.studentNumber).toBeNull();
+    // Two students without a number: no clash.
+    const b = await registerStudent(t, { studentNumber: null });
+
+    expect(json(await put(a, taken.studentNumber)).code).toBe('STUDENT_NUMBER_TAKEN');
+    expect((await put(a, 'p 777 001')).statusCode).toBe(204);
+    expect((await ok(call(a, 'GET', '/me'))).student.studentNumber).toBe('P777001');
+    // Once set, it doesn't change here.
+    expect(json(await put(a, 'P777002')).code).toBe('STUDENT_NUMBER_SET');
+
+    // Their own card gives the number: free → saved; someone else's → refused.
+    const card = multipart(await picture());
+    const read = (who: Who) => t.app.inject({ method: 'POST', url: '/api/v1/me/student-card/read', headers: { ...bearer(who.tokens.accessToken), ...card.headers }, payload: card.payload });
+    t.ocr.text = `UNIVERSITE GASTON BERGER\nNom : GAYE\nN° : ${taken.studentNumber}`;
+    expect(json(await read(b)).code).toBe('NOT_YOUR_CARD');
+    t.ocr.text = 'UNIVERSITE GASTON BERGER\nNom : DIOP\nN° : P888123';
+    expect(await ok(read(b))).toMatchObject({ matched: 'number', studentNumber: 'P888123' });
+    expect((await ok(call(b, 'GET', '/me'))).student.studentNumber).toBe('P888123');
   });
 });

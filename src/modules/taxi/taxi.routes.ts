@@ -21,6 +21,7 @@ export const TripView = Type.Object({
   seatsTaken: Type.Number({ description: 'Organizer, paid seats, unpaid holds and seats kept after a late leave.' }),
   fare: Type.Number(),
   seatPrice: Type.Number(),
+  payOnline: Type.Boolean({ description: 'Seats paid in the app (Wave / Orange Money). False: joining reserves the seat, the fare is settled in the taxi.' }),
   status: Type.String({ description: 'open | departed | cancelled' }),
   organizer: Type.Object({ ...Person, trips: Type.Number(), lateCancels: Type.Number() }),
   passengers: Type.Array(Type.Object({ ...Person, role: Type.String(), checkedIn: Type.Boolean() })),
@@ -57,7 +58,7 @@ const NewTripBody = Type.Object(
 );
 const MethodBody = Type.Object({ method: Type.Enum(PAYMENT_METHODS) }, { additionalProperties: false });
 const JoinBody = Type.Object(
-  { method: Type.Enum(PAYMENT_METHODS), returnUrl: Type.Optional(Type.String({ maxLength: 300, description: 'App deep link the checkout page returns to.' })) },
+  { method: Type.Optional(Type.Enum(PAYMENT_METHODS, { description: 'Trips paid in the app (payOnline) only.' })), returnUrl: Type.Optional(Type.String({ maxLength: 300, description: 'App deep link the checkout page returns to.' })) },
   { additionalProperties: false },
 );
 
@@ -81,7 +82,7 @@ export function registerTaxiRoutes(root: FastifyInstance, { service, requireStud
 
   app.get(
     '/taxi/me',
-    { ...guard, schema: { tags, response: { 200: Type.Object({ key: Type.String(), ...Standing, activeTripId: Nullable(Type.String()) }) } } },
+    { ...guard, schema: { tags, response: { 200: Type.Object({ key: Type.String(), ...Standing, activeTripId: Nullable(Type.String()), onlinePayment: Type.Boolean({ description: 'Trips proposed now have their seats paid in the app (false: reservation only).' }) }) } } },
     async (req) => {
       const [standing, active] = await Promise.all([service.standing(me(req)), service.activeTripOf(me(req))]);
       return {
@@ -89,6 +90,7 @@ export function registerTaxiRoutes(root: FastifyInstance, { service, requireStud
         ...standing,
         suspendedUntil: standing.suspendedUntil?.toISOString() ?? null,
         activeTripId: active?._id.toHexString() ?? null,
+        onlinePayment: service.onlinePayment,
       };
     },
   );
@@ -100,10 +102,10 @@ export function registerTaxiRoutes(root: FastifyInstance, { service, requireStud
 
   app.post(
     '/taxi/trips/:id/join',
-    { ...guard, schema: { tags, params: IdParams, body: JoinBody, response: { 200: Type.Object({ trip: TripView, payment: PaymentView }), 201: Type.Object({ trip: TripView, payment: PaymentView }) } } },
+    { ...guard, schema: { tags, params: IdParams, body: JoinBody, response: { 200: Type.Object({ trip: TripView, payment: Nullable(PaymentView) }), 201: Type.Object({ trip: TripView, payment: Nullable(PaymentView) }) } } },
     async (req, reply) => {
       const { trip, payment, replay } = await service.join(me(req), toObjectId(req.params.id), req.body, baseUrlOf(req));
-      return reply.status(replay ? 200 : 201).send({ trip: await service.view(me(req), trip), payment: paymentView(payment) });
+      return reply.status(replay ? 200 : 201).send({ trip: await service.view(me(req), trip), payment: payment ? paymentView(payment) : null });
     },
   );
 

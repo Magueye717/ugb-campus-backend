@@ -33,6 +33,7 @@ const ItemView = Type.Object({
   secret: Nullable(Type.String({ description: 'Found objects, declarer only: the detail to check.' })),
   myClaimId: Nullable(Type.String({ description: 'My conversation about it (open /lost/claims/:id).' })),
   conversationsCount: Type.Number({ description: 'Declarer: conversations opened about it.' }),
+  claimIds: Type.Array(Type.String(), { description: 'Declarer: those conversations (each a lost_claim chat, contextRef = claim id), for their unread badges.' }),
 });
 const ItemDetail = Type.Object({
   ...ItemView.properties,

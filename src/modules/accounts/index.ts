@@ -29,7 +29,7 @@ export type AccountsApi = Pick<
   | 'normalizeStudentNumber' | 'normalizeName' | 'residence' | 'phoneOrThrow' | 'availability' | 'canRegister' | 'createStudentAccount'
   | 'origin' | 'audienceOf' | 'userIdsInAudience' | 'studentByNumber' | 'searchStudents'
   | 'findForLogin' | 'findByPhone' | 'findById' | 'namesByIds' | 'contactsByIds' | 'hasStudentProfile' | 'notificationPrefsByIds' | 'recordLoginFailure' | 'recordLoginSuccess' | 'setPassword'
-  | 'createStaffUser' | 'setPlatformRoles' | 'hasAnySpace' | 'hasPlatformRole' | 'markCardRead' | 'changePhone' | 'setAvatar'
+  | 'createStaffUser' | 'setPlatformRoles' | 'hasAnySpace' | 'hasPlatformRole' | 'markCardRead' | 'claimStudentNumber' | 'changePhone' | 'setAvatar'
 > & {
   requireStudent: preHandlerHookHandler;
   requirePlatformRole(role: PlatformRole): preHandlerHookHandler;
@@ -83,7 +83,7 @@ export function createAccountsModule(deps: { db: Db; clock: Clock; rentree: stri
     origin: (i) => service.origin(i),
     audienceOf: (u) => service.audienceOf(u),
     studentByNumber: (n) => service.studentByNumber(n),
-    searchStudents: (w, l) => service.searchStudents(w, l),
+    searchStudents: (w, l, e) => service.searchStudents(w, l, e),
     userIdsInAudience: (a) => service.userIdsInAudience(a),
     availability: (p, n) => service.availability(p, n),
     canRegister: (p) => service.canRegister(p),
@@ -101,6 +101,7 @@ export function createAccountsModule(deps: { db: Db; clock: Clock; rentree: stri
     createStaffUser: (i) => service.createStaffUser(i),
     hasAnySpace: (u) => service.hasAnySpace(u),
     markCardRead: (u) => service.markCardRead(u),
+    claimStudentNumber: (u, n) => service.claimStudentNumber(u, n),
     changePhone: (u, p) => service.changePhone(u, p),
     setAvatar: (u, a) => service.setAvatar(u, a),
     hasPlatformRole: (u, r) => service.hasPlatformRole(u, r),

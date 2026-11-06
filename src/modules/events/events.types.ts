@@ -3,6 +3,7 @@ import type { ObjectId } from 'mongodb';
 import type { ImageRef } from '../../platform/media.js';
 import type { Audience } from '../accounts/index.js';
 import type { PaymentMethod } from '../payments/index.js';
+import type { TicketPaymentMethod } from '../ticketing/index.js';
 
 export const EVENT_CATEGORIES = ['soiree', 'conference', 'sortie', 'sport', 'culture', 'autre'] as const;
 export type EventCategory = (typeof EVENT_CATEGORIES)[number];
@@ -49,6 +50,8 @@ export type EventDoc = {
   ticketTypes: TicketType[];
   /** Tickets one student can buy for this event, all orders together (for friends too). */
   maxPerStudent: number;
+  /** How students may pay: Wave, Orange Money, cash at the door. Missing: Wave and Orange Money (events from before). */
+  paymentMethods?: TicketPaymentMethod[];
   status: EventStatus;
   audience: EventAudience;
   /** A student's event: the publication being paid (or paid). */
@@ -79,7 +82,7 @@ export type EventBookingDoc = {
   userId: ObjectId;
   units: BookingUnit[];
   total: number;
-  method: PaymentMethod;
+  method: TicketPaymentMethod;
   status: EventBookingStatus;
   holdExpiresAt: Date;
   paymentId: ObjectId | null;

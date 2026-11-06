@@ -2,6 +2,7 @@ import type { DataMigration } from '../../platform/db/migrations.js';
 import { bson, type CollectionSpec } from '../../platform/db/schema.js';
 import { PAYMENT_METHODS } from '../payments/index.js';
 import { BOOKING_STATUSES, EVENT_CATEGORIES, EVENT_STATUSES } from './events.types.js';
+import { TICKET_PAYMENT_METHODS } from '../ticketing/ticketing.types.js';
 
 const ticketType = bson.object(
   {
@@ -32,6 +33,7 @@ export const eventsCollections: CollectionSpec[] = [
           salesCloseAt: bson.date,
           ticketTypes: bson.array(ticketType, { minItems: 1, maxItems: 6 }),
           maxPerStudent: bson.int({ minimum: 1, maximum: 20 }),
+          paymentMethods: bson.array(bson.enumOf(TICKET_PAYMENT_METHODS), { minItems: 1 }),
           status: bson.enumOf(EVENT_STATUSES),
         },
         ['code', 'orgId', 'title', 'category', 'description', 'images', 'venue', 'startsAt', 'endsAt', 'salesCloseAt', 'ticketTypes', 'maxPerStudent', 'status', 'review', 'reviewLog', 'createdBy', 'createdAt', 'updatedAt'],
@@ -53,7 +55,7 @@ export const eventsCollections: CollectionSpec[] = [
           eventId: bson.objectId,
           userId: bson.objectId,
           total: bson.int({ minimum: 0 }),
-          method: bson.enumOf(PAYMENT_METHODS),
+          method: bson.enumOf(TICKET_PAYMENT_METHODS),
           status: bson.enumOf(BOOKING_STATUSES),
           units: bson.array(bson.object({ unitId: bson.objectId, typeId: bson.string(), status: bson.enumOf(BOOKING_STATUSES) }, ['unitId', 'typeId', 'name', 'price', 'status', 'ticketId']), { minItems: 1, maxItems: 20 }),
         },

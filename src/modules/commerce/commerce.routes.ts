@@ -11,7 +11,7 @@ import type { AuditApi } from '../audit/index.js';
 import type { OrganizationsApi, OrgRole } from '../organizations/index.js';
 import { PaymentView, paymentView } from '../payments/index.js';
 import type { BusinessRef, CommerceService } from './commerce.service.js';
-import { BUSINESS_KINDS, DELIVERY_ZONE_LABELS, DELIVERY_ZONES, ITEM_SECTIONS, MAX_ITEM_PHOTOS, MAX_SPECIALTIES, ORDER_MODES, ORDER_PAYMENT_LABELS, ORDER_PAYMENT_METHODS, SPECIALTIES, type BusinessDoc, type BusinessKind } from './commerce.types.js';
+import { BUSINESS_KINDS, DELIVERY_ZONE_LABELS, DELIVERY_ZONES, ITEM_SECTIONS, MAX_ITEM_PHOTOS, MAX_SPECIALTIES, ORDER_MODES, ORDER_PAYMENT_LABELS, ORDER_PAYMENT_METHODS, SALES_MAX_DAYS, SPECIALTIES, type BusinessDoc, type BusinessKind } from './commerce.types.js';
 
 // Null first: the validator would otherwise coerce null to 0 ("free delivery") through the integer branch.
 const Fee = Nullable(Type.Integer({ minimum: 0, maximum: 5000 }));
@@ -33,6 +33,10 @@ const ItemView = Type.Object({
   soldOut: Type.Boolean(),
   available: Type.Boolean(),
   orderable: Type.Boolean({ description: 'False: for information only (a service done on the spot), never in an order.' }),
+  likes: Type.Integer({ description: 'Students who like it.' }),
+  liked: Type.Boolean({ description: 'The caller likes it (always false in the business’s own catalog).' }),
+  createdAt: Type.String({ description: 'When it was added: the market lists the newest first.' }),
+  interested: Type.Boolean({ description: 'Done on the spot (not orderable): the caller said « Intéressé ».' }),
 });
 const BusinessView = Type.Object({
   id: Type.String(),
@@ -61,6 +65,7 @@ const BusinessView = Type.Object({
   active: Type.Boolean(),
   byStudent: Type.Boolean({ description: 'A student’s own shop.' }),
   onlinePayments: Type.Boolean({ description: 'May take Wave and Orange Money. A student’s shop: false until the team has verified it (cash only).' }),
+  itemLikes: Type.Boolean({ description: 'Its items can be liked (shops: yes; restaurants: no heart).' }),
 });
 const ListedBusiness = Type.Object({ ...BusinessView.properties, highlights: Type.Array(ItemView), minPrice: Nullable(Type.Number()), itemsCount: Type.Number(), itemNames: Type.Array(Type.String(), { description: 'Every available item: for searching.' }) });
 const BusinessDetail = Type.Object({
@@ -164,7 +169,7 @@ export function registerCommerceRoutes(root: FastifyInstance, { service, audit, 
   app.get(
     '/businesses',
     { preHandler: requireAuth, schema: { tags, description: 'Private restaurants or shops, open first, with a few of their items.', querystring: Type.Object({ kind: Type.Enum(BUSINESS_KINDS) }, { additionalProperties: false }), response: { 200: Type.Object({ items: Type.Array(ListedBusiness) }) } } },
-    async (req) => ({ items: await service.list(req.query.kind) }),
+    async (req) => ({ items: await service.list(req.query.kind, me(req)) }),
   );
 
   app.get(
@@ -178,14 +183,38 @@ export function registerCommerceRoutes(root: FastifyInstance, { service, audit, 
         response: { 200: Type.Object({ businesses: Type.Array(BusinessView), items: Type.Array(Type.Object({ ...ItemView.properties, businessId: Type.String() })) }) },
       },
     },
-    async (req) => service.market(req.query.kind),
+    async (req) => service.market(req.query.kind, me(req)),
   );
 
   app.get('/businesses/:id', { preHandler: requireAuth, schema: { tags, params: IdParams, response: { 200: BusinessDetail } } }, async (req) => {
-    const d = await service.detail(toObjectId(req.params.id));
+    const d = await service.detail(toObjectId(req.params.id), me(req));
     const roles = await roleIn(toObjectId(d.orgId), me(req), ['owner', 'manager', 'staff'], d.kind);
     return { ...d, viewer: { member: !!roles, canEdit: !!roles?.some((r) => r === 'owner' || r === 'manager') } };
   });
+
+  // A heart on an article or a dish: PUT likes it, DELETE takes the like back. Both idempotent.
+  const LikeResult = Type.Object({ liked: Type.Boolean(), likes: Type.Integer({ description: 'Its count now.' }) });
+  app.put(
+    '/items/:id/like',
+    { preHandler: requireAuth, schema: { tags, params: IdParams, description: 'Like a shop’s article (its own team cannot: OWN_BUSINESS; a restaurant’s dish: NOT_LIKEABLE).', response: { 200: LikeResult } } },
+    async (req) => service.like(me(req), toObjectId(req.params.id), true),
+  );
+  app.delete(
+    '/items/:id/like',
+    { preHandler: requireAuth, schema: { tags, params: IdParams, description: 'No longer like it.', response: { 200: LikeResult } } },
+    async (req) => service.like(me(req), toObjectId(req.params.id), false),
+  );
+
+  // « Intéressé » on an article done on the spot: PUT tells the shop (once), DELETE takes it back.
+  const InterestResult = Type.Object({ interested: Type.Boolean() });
+  app.put(
+    '/items/:id/interest',
+    { preHandler: requireAuth, schema: { tags, params: IdParams, description: 'Not orderable (done on the spot): the shop’s team is told who, with their phone (ORDERABLE: add it to the basket instead).', response: { 200: InterestResult } } },
+    async (req) => service.interest(me(req), toObjectId(req.params.id), true),
+  );
+  app.delete('/items/:id/interest', { preHandler: requireAuth, schema: { tags, params: IdParams, response: { 200: InterestResult } } }, async (req) =>
+    service.interest(me(req), toObjectId(req.params.id), false),
+  );
 
   app.post(
     '/businesses/:id/orders',
@@ -249,6 +278,20 @@ export function registerCommerceRoutes(root: FastifyInstance, { service, audit, 
 
   // ---- The business's own space (members: /org/:orgId/members, owner) ----------------------------------------------
 
+  app.get(
+    '/org/:orgId/:space/interests',
+    {
+      ...team,
+      schema: {
+        tags,
+        params: OrgParams,
+        description: 'Who said « Intéressé » lately (30 days), newest first: to call them back.',
+        response: { 200: Type.Object({ items: Type.Array(Type.Object({ id: Type.String(), at: Type.String(), item: Type.Object({ id: Type.String(), name: Type.String() }), student: Type.Object({ name: Type.String(), phone: Type.String() }) })) }) },
+      },
+    },
+    async (req) => ({ items: await service.interestsOf(refOf(req.params)) }),
+  );
+
   app.get('/org/:orgId/:space/business', { ...team, schema: { tags, params: OrgParams, response: { 200: BusinessView } } }, async (req) => view(await service.ofOrg(refOf(req.params))));
 
   // Pausing orders is the managers' call too; the rest of the profile is the owner's only.
@@ -289,6 +332,38 @@ export function registerCommerceRoutes(root: FastifyInstance, { service, audit, 
     '/org/:orgId/:space/orders',
     { ...team, schema: { tags, params: OrgParams, querystring: Type.Object({ scope: Type.Optional(Type.Enum(['active', 'done'] as const)) }, { additionalProperties: false }), response: { 200: Type.Object({ items: Type.Array(OrderView) }) } } },
     async (req) => ({ items: await service.queue(refOf(req.params), req.query.scope ?? 'active') }),
+  );
+
+  const Day = Type.String({ pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'YYYY-MM-DD, Dakar time.' });
+  const Money = Type.Integer({ description: 'FCFA' });
+  app.get(
+    '/org/:orgId/:space/sales',
+    {
+      ...managers,
+      schema: {
+        tags,
+        params: OrgParams,
+        description: `« Mes ventes » (owners and managers): completed orders placed from \`from\` to \`to\` (both included, ${SALES_MAX_DAYS} days at most). Refused, cancelled and in-progress orders are counted apart, not in the money.`,
+        querystring: Type.Object({ from: Day, to: Day }, { additionalProperties: false }),
+        response: {
+          200: Type.Object({
+            from: Type.String(),
+            to: Type.String(),
+            revenue: Money,
+            orders: Type.Integer(),
+            average: Money,
+            methods: Type.Array(Type.Object({ method: Type.String(), label: Type.String(), amount: Money, orders: Type.Integer() })),
+            owed: Type.Integer({ description: 'Wave / Orange Money sales not yet received on the owner’s number.' }),
+            days: Type.Array(Type.Object({ date: Type.String(), revenue: Money, orders: Type.Integer() })),
+            top: Type.Array(Type.Object({ itemId: Type.String(), name: Type.String(), qty: Type.Integer(), revenue: Money })),
+            inProgress: Type.Integer(),
+            refused: Type.Integer(),
+            cancelled: Type.Integer(),
+          }),
+        },
+      },
+    },
+    async (req) => service.sales(refOf(req.params), req.query.from, req.query.to),
   );
 
   app.post(

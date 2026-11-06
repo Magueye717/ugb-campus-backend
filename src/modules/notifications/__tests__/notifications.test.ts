@@ -6,7 +6,7 @@ import { LogPushSender, type PushMessage, type PushSender } from '../push.js';
 
 let t: TestApp;
 beforeAll(async () => {
-  t = await createTestApp({ PAYMENTS_SIMULATOR: 'true' });
+  t = await createTestApp({ PAYMENTS_SIMULATOR: 'true', TAXI_ONLINE_PAYMENT: 'true' });
 });
 afterAll(async () => t.close());
 

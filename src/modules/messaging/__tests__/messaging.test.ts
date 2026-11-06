@@ -7,7 +7,7 @@ import { bearer, createStaff, createTestApp, json, registerStudent, T0, type Tes
 // Conversations are created by their owning feature: these tests go through Sunu Taxi, the first one.
 let t: TestApp;
 beforeAll(async () => {
-  t = await createTestApp({ PAYMENTS_SIMULATOR: 'true' });
+  t = await createTestApp({ PAYMENTS_SIMULATOR: 'true', TAXI_ONLINE_PAYMENT: 'true' });
 });
 afterAll(async () => t.close());
 

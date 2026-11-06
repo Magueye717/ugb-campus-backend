@@ -35,6 +35,11 @@ describe('configuration', () => {
     }
   });
 
+  it('S3 storage without its keys refuses to boot, in development too (names only)', () => {
+    expect(() => loadConfig({ MEDIA_STORAGE: 's3', S3_BUCKET: 'b', MEDIA_PUBLIC_URL: 'https://media.test' })).toThrow(/MEDIA_STORAGE=s3 needs S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY/);
+    expect(() => loadConfig({ MEDIA_STORAGE: 's3', S3_BUCKET: 'b', MEDIA_PUBLIC_URL: 'https://media.test', S3_ACCESS_KEY_ID: 'k', S3_SECRET_ACCESS_KEY: 's' })).not.toThrow();
+  });
+
   it('parses numbers and booleans from strings', () => {
     const c = loadConfig({ PORT: '4000', DOCS_ENABLED: 'true', OTP_DEV_MODE: 'false' });
     expect(c).toMatchObject({ PORT: 4000, DOCS_ENABLED: true, OTP_DEV_MODE: false });

@@ -2,6 +2,7 @@ import { ObjectId, type Collection, type Db } from 'mongodb';
 
 import type { Clock } from '../../platform/clock.js';
 import { isDuplicateKey } from '../../platform/db/mongo.js';
+import { randomCode } from '../../platform/security/crypto.js';
 import { errors } from '../../platform/http/errors.js';
 import { normalizeEmail } from '../../platform/email.js';
 import { normalizePhone } from '../../platform/phone.js';
@@ -20,7 +21,7 @@ export const spaceKey = (space: OrgSpace, orgId: ObjectId | string) => `${space}
 export type NewMember = { phone: string; roles: OrgRole[]; firstName?: string; lastName?: string; password?: string };
 
 export type CreateOrgInput = { slug: string; name: string; category: OrgCategory; capabilities: OrgCapability[]; level?: OrgLevel; payoutPhone?: string; email?: string };
-export type UpdateOrgInput = Partial<{ name: string; level: OrgLevel; status: OrganizationDoc['status']; payoutPhone: string | null; email: string | null }>;
+export type UpdateOrgInput = Partial<{ name: string; category: OrgCategory; level: OrgLevel; status: OrganizationDoc['status']; payoutPhone: string | null; email: string | null }>;
 
 export class OrganizationsService {
   private readonly orgs: Collection<OrganizationDoc>;
@@ -79,6 +80,7 @@ export class OrganizationsService {
   async update(id: ObjectId, input: UpdateOrgInput) {
     const $set: Partial<OrganizationDoc> = { updatedAt: this.clock.now() };
     if (input.name !== undefined) $set.name = input.name.trim();
+    if (input.category !== undefined) $set.category = input.category;
     if (input.level !== undefined) $set.level = input.level;
     if (input.status !== undefined) $set.status = input.status;
     if (input.payoutPhone !== undefined) $set.payoutAccount = this.payout(input.payoutPhone);
@@ -86,6 +88,55 @@ export class OrganizationsService {
     const doc = await this.orgs.findOneAndUpdate({ _id: id }, { $set }, { returnDocument: 'after' });
     if (!doc) throw errors.notFound();
     return doc;
+  }
+
+  // ---- Référencement: caravan organizers ---------------------------------------------------------------------
+
+  /** Every organization that runs caravans, with its owner (to call them). */
+  async caravanOrganizers() {
+    const orgs = await this.orgs.find({ capabilities: 'caravans' }).sort({ name: 1 }).limit(500).toArray();
+    const owners = await this.members.find({ orgId: { $in: orgs.map((o) => o._id) }, space: 'organizer', status: 'active', roles: 'owner' }).toArray();
+    const users = new Map((await Promise.all([...new Set(owners.map((m) => m.userId.toHexString()))].map((id) => this.accounts.findById(new ObjectId(id))))).filter((u) => !!u).map((u) => [u!._id.toHexString(), u!]));
+    return orgs.map((org) => {
+      const m = owners.find((x) => x.orgId.equals(org._id));
+      const u = m ? users.get(m.userId.toHexString()) : undefined;
+      return { org, owner: u ? { firstName: u.firstName, lastName: u.lastName, phone: u.phone } : null };
+    });
+  }
+
+  /** The caravan organizer this account already owns, if any (caravans are their own space, apart from shops). */
+  private async caravanOrgOf(userId: ObjectId) {
+    return (await this.membershipsForUser(userId)).find((m) => m.roles.includes('owner') && m.capabilities.includes('caravans')) ?? null;
+  }
+
+  /** Before adding: the account of this number, and the caravan organizer it already runs (one per account). */
+  async caravanOwnerLookup(phoneInput: string) {
+    const phone = this.accounts.phoneOrThrow(phoneInput);
+    const user = await this.accounts.findByPhone(phone);
+    if (!user || user.status === 'deleted') return { account: null, organizer: null };
+    const org = await this.caravanOrgOf(user._id);
+    return { account: { firstName: user.firstName, lastName: user.lastName }, organizer: org ? { name: org.name } : null };
+  }
+
+  /**
+   * A transport company or an amicale that sells caravan seats: always its own organization (its own organizer space),
+   * never joined to a shop or a restaurant the owner may run. An account is created for a new number. Seats are paid to
+   * the payout number, the owner's by default.
+   */
+  async createCaravanOrganizer(input: { name: string; category: OrgCategory; level?: OrgLevel; payoutPhone?: string; owner: { phone: string; firstName?: string; lastName?: string; password?: string } }) {
+    const phone = this.accounts.phoneOrThrow(input.owner.phone);
+    const known = await this.accounts.findByPhone(phone);
+    const existing = known ? await this.caravanOrgOf(known._id) : null;
+    if (existing) throw errors.conflict('ALREADY_ORGANIZER', `Ce numéro gère déjà « ${existing.name} ».`);
+    if (!known && (!input.owner.firstName || !input.owner.lastName)) throw errors.validation('Indique le prénom et le nom du responsable.', { field: 'owner' });
+    const owner = known ?? (await this.accounts.createStaffUser({ phone, firstName: input.owner.firstName!, lastName: input.owner.lastName!, password: input.owner.password }));
+    const base = input.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'organisateur';
+    const org = await this.create({
+      slug: `${base}-${randomCode(4).toLowerCase()}`, name: input.name, category: input.category, capabilities: ['caravans'], level: input.level ?? 'verifie',
+      payoutPhone: input.payoutPhone ?? owner.phone,
+    });
+    await this.setOwner(org._id, phone, null);
+    return org;
   }
 
   list() {

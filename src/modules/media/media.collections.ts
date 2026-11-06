@@ -15,6 +15,7 @@ export const mediaCollections: CollectionSpec[] = [
           width: bson.int({ minimum: 1 }),
           height: bson.int({ minimum: 1 }),
           bytes: bson.int({ minimum: 1 }),
+          pages: bson.int({ minimum: 1 }),
         },
         ['ownerId', 'purpose', 'key', 'url', 'contentType', 'bytes', 'createdAt'],
       ),

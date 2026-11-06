@@ -5,14 +5,15 @@ import type { ImageRef } from '../../platform/media.js';
 /**
  * The app creator's team. Only `admin` (the super admin) gives these roles. content_editor: alerts, "À la une",
  * paid banners · resto_u_staff: the public restaurants' menus (only the restaurants assigned to them) ·
- * place_editor / restaurant_editor / shop_editor: add and update the campus places, private restaurants, shops.
+ * place_editor / restaurant_editor / shop_editor: add and update the campus places, private restaurants, shops ·
+ * caravan_editor: registers the caravan organizers (transport companies, amicales) and their owner.
  */
-export const PLATFORM_ROLES = ['admin', 'content_editor', 'resto_u_staff', 'lost_office', 'academic_editor', 'finance', 'place_editor', 'restaurant_editor', 'shop_editor'] as const;
+export const PLATFORM_ROLES = ['admin', 'content_editor', 'resto_u_staff', 'lost_office', 'academic_editor', 'finance', 'place_editor', 'restaurant_editor', 'shop_editor', 'caravan_editor'] as const;
 export type PlatformRole = (typeof PLATFORM_ROLES)[number];
 /** How the team list and the notifications name each role. */
 export const PLATFORM_ROLE_LABELS: Record<PlatformRole, string> = {
   admin: 'Super administrateur', content_editor: 'Communication (alertes, bannières)', resto_u_staff: 'Restaurant universitaire', lost_office: 'Bureau des objets trouvés',
-  academic_editor: 'Scolarité', finance: 'Finances', place_editor: 'Lieux', restaurant_editor: 'Restaurants privés', shop_editor: 'Boutiques',
+  academic_editor: 'Scolarité', finance: 'Finances', place_editor: 'Lieux', restaurant_editor: 'Restaurants privés', shop_editor: 'Boutiques', caravan_editor: 'Organisateurs de caravanes',
 };
 /**
  * The app's work spaces opened by platform roles (admins open them all). A student keeps the student space as
@@ -22,7 +23,7 @@ export const ROLE_SPACES = [
   { space: 'admin', label: 'Administration', roles: ['admin'] },
   { space: 'resto', label: 'Restaurant universitaire', roles: ['resto_u_staff'] },
   { space: 'alerts', label: 'Communication', roles: ['content_editor', 'academic_editor'] },
-  { space: 'directory', label: 'Référencement', roles: ['place_editor', 'restaurant_editor', 'shop_editor'] },
+  { space: 'directory', label: 'Référencement', roles: ['place_editor', 'restaurant_editor', 'shop_editor', 'caravan_editor'] },
 ] as const satisfies readonly { space: string; label: string; roles: readonly PlatformRole[] }[];
 export type RoleSpace = (typeof ROLE_SPACES)[number]['space'];
 /** The kind of a space; an organization's spaces also carry the organization (one entity may run several). */
@@ -115,8 +116,11 @@ export type UserDoc = {
 export type StudentProfileDoc = {
   _id: ObjectId;
   userId: ObjectId;
-  /** Required and unique, not verified against a registry (decision Q-6). */
-  studentNumber: string;
+  /**
+   * Optional at sign-up (added later on the profile, or read from the student's card); unique once set, not verified
+   * against a registry (decision Q-6).
+   */
+  studentNumber: string | null;
   campus: Campus;
   onCampus: boolean;
   village: string | null;
@@ -144,7 +148,7 @@ export type StudentProfileDoc = {
 
 export type NewStudentAccount = {
   phone: string;
-  studentNumber: string;
+  studentNumber: string | null;
   firstName: string;
   lastName: string;
   campus: Campus;

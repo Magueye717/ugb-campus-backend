@@ -4,7 +4,7 @@ import { Type } from 'typebox';
 
 import { actorOf, requireAuth } from '../../platform/auth/auth.js';
 import { errors } from '../../platform/http/errors.js';
-import { IdParams, ObjectIdString, PhoneInput, toObjectId } from '../../platform/http/schemas.js';
+import { IdParams, Nullable, ObjectIdString, PhoneInput, toObjectId } from '../../platform/http/schemas.js';
 import type { AuditApi } from '../audit/index.js';
 import { orgView, ROLE_LABELS, SPACE_ROLES, type OrganizationsService } from './organizations.service.js';
 import { ORG_CAPABILITIES, ORG_CATEGORIES, ORG_LEVELS, ORG_ROLES, ORG_SPACES, type OrgRole, type OrgSpace } from './organizations.types.js';
@@ -57,10 +57,12 @@ type Deps = {
   service: OrganizationsService;
   audit: AuditApi;
   requireAdmin: preHandlerHookHandler;
+  /** Référencement: who registers caravan organizers (admins pass too). */
+  requireCaravanEditor: preHandlerHookHandler;
   requireOrgRole: (roles: OrgRole[], space?: OrgSpace | 'param') => preHandlerHookHandler;
 };
 
-export function registerOrganizationsRoutes(root: FastifyInstance, { service, audit, requireAdmin, requireOrgRole }: Deps) {
+export function registerOrganizationsRoutes(root: FastifyInstance, { service, audit, requireAdmin, requireCaravanEditor, requireOrgRole }: Deps) {
   const app = root.withTypeProvider<TypeBoxTypeProvider>();
   const admin = { preHandler: [requireAuth, requireAdmin] };
   const trail = (req: { id: string; actor: { userId: string } | null }, action: string, id: string, metadata?: Record<string, unknown>) =>
@@ -169,6 +171,110 @@ export function registerOrganizationsRoutes(root: FastifyInstance, { service, au
     await trail(req, 'membership.revoke', req.params.orgId, { userId: req.params.userId, space: req.params.space });
     return reply.status(204).send();
   });
+
+  // ---- Référencement: caravan organizers (transport companies, amicales) ----------------------------------------
+
+  const editor = { preHandler: [requireAuth, requireCaravanEditor] };
+  const CARAVAN_CATEGORIES = ['Entreprise', 'Transporteur', 'Amicale'] as const;
+  const CaravanOrganizer = Type.Object({
+    ...OrgView.properties,
+    payoutPhone: Nullable(Type.String()),
+    owner: Nullable(Type.Object({ firstName: Type.String(), lastName: Type.String(), phone: Type.String() })),
+  });
+  const caravanView = (x: { org: Parameters<typeof orgView>[0] & { payoutAccount: { phone: string } | null }; owner: { firstName: string; lastName: string; phone: string } | null }) => ({
+    ...orgView(x.org), payoutPhone: x.org.payoutAccount?.phone ?? null, owner: x.owner,
+  });
+  const oneCaravanOrganizer = async (id: string) => {
+    const found = (await service.caravanOrganizers()).find((x) => x.org._id.toHexString() === id);
+    if (!found) throw errors.notFound('Organisateur introuvable.');
+    return found;
+  };
+
+  app.get('/admin/caravan-organizers', { ...editor, schema: { tags: ['admin'], response: { 200: Type.Object({ items: Type.Array(CaravanOrganizer) }) } } }, async () => ({
+    items: (await service.caravanOrganizers()).map(caravanView),
+  }));
+
+  app.post(
+    '/admin/caravan-organizers/owner-lookup',
+    {
+      ...editor,
+      schema: {
+        tags: ['admin'],
+        description: 'Before adding: the account of this number (no name to ask then), and the caravan organizer it already runs (one per account).',
+        body: Type.Object({ phone: PhoneInput }, { additionalProperties: false }),
+        response: {
+          200: Type.Object({
+            account: Nullable(Type.Object({ firstName: Type.String(), lastName: Type.String() })),
+            organizer: Nullable(Type.Object({ name: Type.String() })),
+          }),
+        },
+      },
+    },
+    async (req) => service.caravanOwnerLookup(req.body.phone),
+  );
+
+  app.post(
+    '/admin/caravan-organizers',
+    {
+      ...editor,
+      schema: {
+        tags: ['admin'],
+        description: 'Creates the organization (always its own, never joined to a shop or restaurant) and its owner (an account for a new number). The owner then creates vehicles and departures in the app.',
+        body: Type.Object(
+          {
+            name: Type.String({ minLength: 2, maxLength: 80 }),
+            category: Type.Enum(CARAVAN_CATEGORIES),
+            level: Type.Optional(Type.Enum(ORG_LEVELS)),
+            payoutPhone: Type.Optional(PhoneInput),
+            owner: Type.Object(
+              {
+                phone: PhoneInput,
+                firstName: Type.Optional(Type.String({ minLength: 2, maxLength: 40 })),
+                lastName: Type.Optional(Type.String({ minLength: 2, maxLength: 40 })),
+                password: Type.Optional(Type.String({ maxLength: 128 })),
+              },
+              { additionalProperties: false },
+            ),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 201: CaravanOrganizer },
+      },
+    },
+    async (req, reply) => {
+      const org = await service.createCaravanOrganizer(req.body);
+      await trail(req, 'organization.create', org._id.toHexString(), { capability: 'caravans' });
+      return reply.status(201).send(caravanView(await oneCaravanOrganizer(org._id.toHexString())));
+    },
+  );
+
+  app.patch(
+    '/admin/caravan-organizers/:id',
+    {
+      ...editor,
+      schema: {
+        tags: ['admin'],
+        params: IdParams,
+        body: Type.Object(
+          {
+            name: Type.Optional(Type.String({ minLength: 2, maxLength: 80 })),
+            category: Type.Optional(Type.Enum(CARAVAN_CATEGORIES)),
+            level: Type.Optional(Type.Enum(ORG_LEVELS)),
+            status: Type.Optional(Type.Enum(['active', 'suspended'] as const, { description: 'suspended: its team loses the organizer space.' })),
+            payoutPhone: Type.Optional(Type.Union([PhoneInput, Type.Null()])),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: CaravanOrganizer },
+      },
+    },
+    async (req) => {
+      await oneCaravanOrganizer(req.params.id);
+      await service.update(toObjectId(req.params.id), req.body);
+      await trail(req, 'organization.update', req.params.id, { fields: Object.keys(req.body) });
+      return caravanView(await oneCaravanOrganizer(req.params.id));
+    },
+  );
 
   // ---- Admin (onboarding while there is no web platform, decision Q-12) -----------------------------------------
 

@@ -1,6 +1,7 @@
 import type { DataMigration } from '../../platform/db/migrations.js';
 import { bson, type CollectionSpec } from '../../platform/db/schema.js';
 import { PAYMENT_METHODS } from '../payments/index.js';
+import { TICKET_PAYMENT_METHODS } from '../ticketing/ticketing.types.js';
 import { BOOKING_STATUSES, DEFAULT_MAX_SEATS_PER_STUDENT, DEPARTURE_STATUSES, DIRECTIONS, MAX_SEATS_PER_STUDENT } from './caravans.types.js';
 
 const stop = bson.object({ stopId: bson.string({ minLength: 1, maxLength: 20 }), place: bson.string({ minLength: 2, maxLength: 80 }), at: bson.date }, ['stopId', 'place', 'at']);
@@ -13,17 +14,19 @@ export const caravansCollections: CollectionSpec[] = [
         {
           orgId: bson.objectId,
           label: bson.string({ minLength: 2, maxLength: 60 }),
-          plate: bson.string({ pattern: '^[A-Z0-9-]{4,15}$' }),
+          plate: bson.nullable(bson.string({ pattern: '^[A-Z0-9-]{4,15}$' })),
+          airConditioned: bson.bool,
           capacity: bson.int({ minimum: 4, maximum: 90 }),
           seatsPerRow: bson.int({ minimum: 2, maximum: 6 }),
           blockedSeats: bson.array(bson.int({ minimum: 1 })),
           status: bson.enumOf(['active', 'retired']),
         },
-        ['orgId', 'label', 'plate', 'capacity', 'seatsPerRow', 'blockedSeats', 'status', 'createdAt', 'updatedAt'],
+        ['orgId', 'label', 'plate', 'airConditioned', 'capacity', 'seatsPerRow', 'blockedSeats', 'status', 'createdAt', 'updatedAt'],
       ),
     },
     indexes: [
-      { key: { plate: 1 }, options: { name: 'plate_unique', unique: true } },
+      // A plate is optional: unique only among vehicles that have one.
+      { key: { plate: 1 }, options: { name: 'plate_unique_when_set', unique: true, partialFilterExpression: { plate: { $type: 'string' } } } },
       { key: { orgId: 1, status: 1 }, options: { name: 'org_status' } },
     ],
   },
@@ -43,7 +46,7 @@ export const caravansCollections: CollectionSpec[] = [
           departureAt: bson.date,
           price: bson.int({ minimum: 100, maximum: 100_000 }),
           maxSeatsPerStudent: bson.int({ minimum: 1, maximum: MAX_SEATS_PER_STUDENT }),
-          paymentMethods: bson.array(bson.enumOf(PAYMENT_METHODS), { minItems: 1 }),
+          paymentMethods: bson.array(bson.enumOf(TICKET_PAYMENT_METHODS), { minItems: 1 }),
           minPassengers: bson.int({ minimum: 0 }),
           confirmBy: bson.date,
           bookingClosesAt: bson.date,
@@ -76,7 +79,7 @@ export const caravansCollections: CollectionSpec[] = [
           pickupStopId: bson.string(),
           dropoffStopId: bson.string(),
           price: bson.int({ minimum: 0 }),
-          method: bson.enumOf(PAYMENT_METHODS),
+          method: bson.enumOf(TICKET_PAYMENT_METHODS),
           status: bson.enumOf(BOOKING_STATUSES),
           seatActive: bson.bool,
           countsForLimit: bson.bool,
@@ -101,6 +104,16 @@ export const caravansCollections: CollectionSpec[] = [
 ];
 
 export const caravansMigrations: DataMigration[] = [
+  {
+    id: '2026-11-05-vehicles-air-conditioning',
+    description: 'Vehicles say if they are air-conditioned (no for the existing ones, vehicle and departure snapshots); the plate becomes optional (unique when set).',
+    async up(db) {
+      await db.collection('vehicles').updateMany({ airConditioned: { $exists: false } }, { $set: { airConditioned: false } });
+      await db.collection('departures').updateMany({ 'vehicle.airConditioned': { $exists: false } }, { $set: { 'vehicle.airConditioned': false } });
+      const indexes = await db.collection('vehicles').indexes();
+      if (indexes.some((ix) => ix.name === 'plate_unique')) await db.collection('vehicles').dropIndex('plate_unique');
+    },
+  },
   {
     id: '2026-11-04-departures-payment-methods',
     description: 'Departures accept the providers chosen by the organizer: every provider for the existing ones.',

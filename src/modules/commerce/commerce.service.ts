@@ -11,10 +11,11 @@ import type { MediaApi } from '../media/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
 import type { OrganizationsApi } from '../organizations/index.js';
 import type { PaymentMethod, PaymentsApi, PurposeHandler } from '../payments/index.js';
-import { type BusinessDoc, type BusinessKind, type CatalogItemDoc, DEFAULT_PAYMENT_METHODS, DELIVERY_ZONE_LABELS, DELIVERY_ZONES, type DeliveryFees, type DeliveryZone, type ItemSection, MAX_ITEM_PHOTOS, MAX_SPECIALTIES, ONLINE_PAYMENT_METHODS, onlinePaymentsAllowed, ORDER_AUTO_COMPLETE_H, ORDER_PAY_WITHIN_MIN, ORDER_PAYMENT_LABELS, ORDER_PAYMENT_METHODS, type OrderDoc, type OrderLine, type OrderMode, type OrderPaymentMethod, type OrderStatus, type Service, SPECIALTIES } from './commerce.types.js';
+import { type BusinessDoc, type BusinessKind, type CatalogItemDoc, DEFAULT_PAYMENT_METHODS, type ItemLikeDoc, LIKEABLE_KINDS, DELIVERY_ZONE_LABELS, DELIVERY_ZONES, type DeliveryFees, type DeliveryZone, type ItemSection, MAX_ITEM_PHOTOS, MAX_SPECIALTIES, ONLINE_PAYMENT_METHODS, onlinePaymentsAllowed, ORDER_AUTO_COMPLETE_H, ORDER_PAY_WITHIN_MIN, ORDER_PAYMENT_LABELS, ORDER_PAYMENT_METHODS, type OrderDoc, type OrderLine, type OrderMode, type OrderPaymentMethod, type OrderStatus, SALES_MAX_DAYS, SALES_TOP_ITEMS, type Service, SPECIALTIES } from './commerce.types.js';
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;
+const DAY = 24 * HOUR;
 const fcfa = (n: number) => `${String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} FCFA`;
 const localPhone = (e164: string) => e164.replace(/^\+221/, '').replace(/^(\d{2})(\d{3})(\d{2})(\d{2})$/, '$1 $2 $3 $4');
 const minutes = (hhmm: string) => {
@@ -64,6 +65,8 @@ export class CommerceService {
   private readonly businesses: Collection<BusinessDoc>;
   private readonly items: Collection<CatalogItemDoc>;
   private readonly orders: Collection<OrderDoc>;
+  private readonly likes: Collection<ItemLikeDoc>;
+  private readonly interests: Collection<{ _id?: ObjectId; userId: ObjectId; itemId: ObjectId; businessId: ObjectId; createdAt: Date }>;
 
   constructor(
     db: Db,
@@ -79,6 +82,8 @@ export class CommerceService {
     this.businesses = db.collection('businesses');
     this.items = db.collection('catalogItems');
     this.orders = db.collection('commerceOrders');
+    this.likes = db.collection('itemLikes');
+    this.interests = db.collection('itemInterests');
   }
 
   // ---- Admins: creating a restaurant or a shop --------------------------------------------------------------------
@@ -273,7 +278,7 @@ export class CommerceService {
     const doc: CatalogItemDoc = {
       _id: new ObjectId(), businessId: b._id, section: input.section, category: input.category?.trim() || null, name: input.name.trim(), detail: input.detail?.trim() ?? '', price: input.price,
       photos: await this.itemPhotos(by, requestedPhotos(input) ?? [], []), stock: b.kind === 'shop' && orderable ? (input.stock ?? null) : null, available: input.available ?? true, orderable,
-      sortOrder: input.sortOrder ?? now.getTime(), archivedAt: null, createdAt: now, updatedAt: now,
+      likes: 0, sortOrder: input.sortOrder ?? now.getTime(), archivedAt: null, createdAt: now, updatedAt: now,
     };
     await this.items.insertOne(doc);
     return doc;
@@ -330,15 +335,16 @@ export class CommerceService {
     return { open, label };
   }
 
-  async list(kind: BusinessKind) {
+  async list(kind: BusinessKind, viewer: ObjectId) {
     const docs = await this.businesses.find({ kind, active: true }).sort({ name: 1 }).toArray();
     const items = docs.length ? await this.items.find({ businessId: { $in: docs.map((d) => d._id) }, archivedAt: null, available: true }).sort({ sortOrder: 1 }).toArray() : [];
+    const [liked, interested] = await Promise.all([this.likedBy(viewer, items), this.interestedBy(viewer, items)]);
     return docs
       .map((b) => {
         const mine = items.filter((i) => i.businessId.equals(b._id));
         return {
           ...this.publicView(b),
-          highlights: mine.filter((i) => i.section !== 'drink').slice(0, 3).map((i) => this.itemView(i)),
+          highlights: mine.filter((i) => i.section !== 'drink').slice(0, 3).map((i) => this.itemView(i, liked, interested)),
           minPrice: mine.length ? Math.min(...mine.map((i) => i.price)) : null,
           itemsCount: mine.length,
           // Searching "mafé" finds the restaurants that serve it.
@@ -352,20 +358,115 @@ export class CommerceService {
    * The market: every available article of every open-or-not shop at once (one campus, a few hundred articles), each
    * with its shop, to browse and search across shops.
    */
-  async market(kind: BusinessKind) {
+  async market(kind: BusinessKind, viewer: ObjectId) {
     const docs = await this.businesses.find({ kind, active: true }).sort({ name: 1 }).toArray();
     const items = docs.length ? await this.items.find({ businessId: { $in: docs.map((d) => d._id) }, archivedAt: null, available: true }).sort({ sortOrder: 1 }).limit(1000).toArray() : [];
+    const [liked, interested] = await Promise.all([this.likedBy(viewer, items), this.interestedBy(viewer, items)]);
     return {
       businesses: docs.map((b) => this.publicView(b)).sort((a, b) => Number(b.open) - Number(a.open)),
-      items: items.map((i) => ({ ...this.itemView(i), businessId: i.businessId.toHexString() })),
+      items: items.map((i) => ({ ...this.itemView(i, liked, interested), businessId: i.businessId.toHexString() })),
     };
   }
 
-  async detail(id: ObjectId) {
+  async detail(id: ObjectId, viewer: ObjectId) {
     const b = await this.businesses.findOne({ _id: id, active: true });
     if (!b) throw errors.notFound('Commerce introuvable.');
     const items = await this.items.find({ businessId: b._id, archivedAt: null, available: true }).sort({ section: 1, sortOrder: 1 }).toArray();
-    return { ...this.publicView(b), items: items.map((i) => this.itemView(i)) };
+    const [liked, interested] = await Promise.all([this.likedBy(viewer, items), this.interestedBy(viewer, items)]);
+    return { ...this.publicView(b), items: items.map((i) => this.itemView(i, liked, interested)) };
+  }
+
+  /** Which of these items the student likes (their hexes). */
+  private async interestedBy(userId: ObjectId, items: CatalogItemDoc[]): Promise<Set<string>> {
+    const onSite = items.filter((i) => !i.orderable);
+    if (!onSite.length) return new Set();
+    const mine = await this.interests.find({ userId, itemId: { $in: onSite.map((i) => i._id) } }, { projection: { itemId: 1 } }).toArray();
+    return new Set(mine.map((l) => l.itemId.toHexString()));
+  }
+
+  /**
+   * « Intéressé » on an article done on the spot (printing, repairs…: nothing to order): the shop's team is told who,
+   * with their phone, to call them back. Once per student and article (`on` again is a no-op); `off` takes it back.
+   */
+  async interest(userId: ObjectId, itemId: ObjectId, on: boolean): Promise<{ interested: boolean }> {
+    await this.limiter.hit(`interest:${userId.toHexString()}`, { limit: 60, windowS: 3600 });
+    const item = await this.items.findOne({ _id: itemId, archivedAt: null });
+    const b = item && (await this.businesses.findOne({ _id: item.businessId, active: true }));
+    if (!item || !b) throw errors.notFound('Article introuvable.');
+    if (item.orderable) throw errors.rule('ORDERABLE', 'Cet article se commande : ajoute-le au panier.');
+    if (!on) {
+      await this.interests.deleteOne({ userId, itemId });
+      return { interested: false };
+    }
+    const team = (await this.organizations.members(b.orgId, b.kind)).filter((m) => m.roles.some((r) => r === 'owner' || r === 'manager' || r === 'staff'));
+    if (team.some((m) => m.userId.equals(userId))) throw errors.rule('OWN_BUSINESS', 'C’est ta boutique : tes clients te le diront.');
+    const res = await this.interests.updateOne({ userId, itemId }, { $setOnInsert: { businessId: b._id, createdAt: this.clock.now() } }, { upsert: true });
+    if (res.upsertedCount) {
+      const who = await this.accounts.findById(userId);
+      const name = who ? `${who.firstName} ${who.lastName}` : 'Un étudiant';
+      await this.notifications.notify(
+        team.map((m) => m.userId),
+        {
+          type: 'commerce.item_interest', category: 'paiements', icon: 'hand-left-outline', tone: 'primary', url: '/catalogue', dedupeKey: `interest:${userId.toHexString()}:${itemId.toHexString()}`, channel: 'orders',
+          title: `${name} est intéressé(e) · ${item.name}`,
+          body: who ? `Rappelle au ${localPhone(who.phone)} pour convenir du rendez-vous.` : 'Retrouve sa demande dans ton catalogue.',
+        },
+      );
+    }
+    return { interested: true };
+  }
+
+  /** The shop's side: who said « Intéressé » lately (30 days), newest first, to call them back. */
+  async interestsOf(ref: BusinessRef) {
+    const b = await this.ofOrg(ref);
+    const since = new Date(this.clock.now().getTime() - 30 * 86_400_000);
+    const list = await this.interests.find({ businessId: b._id, createdAt: { $gte: since } }).sort({ createdAt: -1 }).limit(100).toArray();
+    const [users, items] = await Promise.all([
+      this.accounts.contactsByIds([...new Map(list.map((x) => [x.userId.toHexString(), x.userId])).values()]),
+      this.items.find({ _id: { $in: list.map((x) => x.itemId) } }, { projection: { name: 1 } }).toArray(),
+    ]);
+    const names = new Map(items.map((i) => [i._id.toHexString(), i.name]));
+    return list.map((x) => {
+      const c = users.get(x.userId.toHexString());
+      return {
+        id: x._id!.toHexString(), at: x.createdAt.toISOString(),
+        item: { id: x.itemId.toHexString(), name: names.get(x.itemId.toHexString()) ?? 'Article retiré' },
+        student: { name: c ? `${c.firstName} ${c.lastName}` : 'Étudiant', phone: c ? localPhone(c.phone) : '' },
+      };
+    });
+  }
+
+  private async likedBy(userId: ObjectId, items: CatalogItemDoc[]): Promise<Set<string>> {
+    if (!items.length) return new Set();
+    const mine = await this.likes.find({ userId, itemId: { $in: items.map((i) => i._id) } }, { projection: { itemId: 1 } }).toArray();
+    return new Set(mine.map((l) => l.itemId.toHexString()));
+  }
+
+  /**
+   * A student likes an article or a dish (`on`), or no longer does. Idempotent: liking twice counts once. Its own team
+   * doesn't like its own items (as they don't order them).
+   */
+  async like(userId: ObjectId, itemId: ObjectId, on: boolean): Promise<{ liked: boolean; likes: number }> {
+    await this.limiter.hit(`like:${userId.toHexString()}`, { limit: 300, windowS: 3600 });
+    const item = await this.items.findOne({ _id: itemId, archivedAt: null });
+    const b = item && (await this.businesses.findOne({ _id: item.businessId, active: true }));
+    if (!item || !b) throw errors.notFound('Article introuvable.');
+    if (!LIKEABLE_KINDS.includes(b.kind)) throw errors.rule('NOT_LIKEABLE', 'Seuls les articles des boutiques peuvent être aimés.');
+    if (on && (await this.organizations.members(b.orgId, b.kind)).some((m) => m.userId.equals(userId)))
+      throw errors.rule('OWN_BUSINESS', b.kind === 'shop' ? 'C’est ta boutique : tu ne peux pas aimer tes articles.' : 'C’est ton restaurant : tu ne peux pas aimer tes plats.');
+    // The like and the count change together.
+    await withTransaction(this.mongo, async (session) => {
+      if (on) {
+        // An upsert, not an insert: a duplicate-key error would abort the transaction. Already liked: nothing to count.
+        const res = await this.likes.updateOne({ userId, itemId }, { $setOnInsert: { businessId: b._id, createdAt: this.clock.now() } }, { upsert: true, session });
+        if (res.upsertedCount) await this.items.updateOne({ _id: itemId }, { $inc: { likes: 1 } }, { session });
+      } else {
+        const res = await this.likes.deleteOne({ userId, itemId }, { session });
+        if (res.deletedCount) await this.items.updateOne({ _id: itemId, likes: { $gt: 0 } }, { $inc: { likes: -1 } }, { session });
+      }
+    });
+    const after = await this.items.findOne({ _id: itemId }, { projection: { likes: 1 } });
+    return { liked: on, likes: after?.likes ?? 0 };
   }
 
   /** The students' average rating of its orders (ratings module). */
@@ -404,14 +505,17 @@ export class CommerceService {
       active: b.active,
       byStudent: !!b.byStudent,
       onlinePayments: onlinePaymentsAllowed(b),
+      itemLikes: LIKEABLE_KINDS.includes(b.kind),
     };
   }
 
-  itemView(i: CatalogItemDoc) {
+  /** `liked`: the items the caller likes (see `likedBy`); none for the business's own views. */
+  itemView(i: CatalogItemDoc, liked?: Set<string>, interested?: Set<string>) {
     return {
       id: i._id.toHexString(), section: i.section, category: i.category, name: i.name, detail: i.detail, price: i.price,
       photo: i.photos[0]?.url ?? null, photos: i.photos.map((p) => p.url), photoIds: i.photos.map((p) => p.mediaId.toHexString()),
       stock: i.stock, soldOut: i.stock !== null && i.stock <= 0, available: i.available, orderable: i.orderable,
+      likes: i.likes ?? 0, liked: !!liked?.has(i._id.toHexString()), interested: !!interested?.has(i._id.toHexString()), createdAt: i.createdAt.toISOString(),
     };
   }
 
@@ -638,6 +742,82 @@ export class CommerceService {
       .limit(200)
       .toArray();
     return this.orderViews(docs, true);
+  }
+
+  /**
+   * « Mes ventes » from `from` to `to` (days, both included, Dakar time, which is UTC all year). Sales are completed
+   * orders, counted on the day they were placed: their total (delivery included), by payment method, day by day, the
+   * best sellers, and what Wave / Orange Money still owe (payouts not yet received). Orders still being served and
+   * refused or cancelled ones are counted apart, never in the money.
+   */
+  async sales(ref: BusinessRef, from: string, to: string) {
+    const b = await this.ofOrg(ref);
+    const start = new Date(`${from}T00:00:00.000Z`);
+    const last = new Date(`${to}T00:00:00.000Z`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(last.getTime()) || last < start) throw errors.validation('Période invalide.', { field: 'from' });
+    const days = Math.round((last.getTime() - start.getTime()) / DAY) + 1;
+    if (days > SALES_MAX_DAYS) throw errors.validation(`${SALES_MAX_DAYS} jours au plus à la fois.`, { field: 'to' });
+    const end = new Date(last.getTime() + DAY);
+    const done = { $match: { status: 'completed' } };
+    type Facets = {
+      total: { revenue: number; orders: number }[];
+      methods: { _id: OrderPaymentMethod; amount: number; orders: number }[];
+      byDay: { _id: string; revenue: number; orders: number }[];
+      top: { _id: ObjectId; name: string; qty: number; revenue: number }[];
+      statuses: { _id: OrderStatus; n: number }[];
+      owed: { amount: number }[];
+    };
+    const [f] = await this.orders
+      .aggregate<Facets>([
+        { $match: { businessId: b._id, createdAt: { $gte: start, $lt: end }, status: { $nin: ['pending_payment', 'expired'] } } },
+        {
+          $facet: {
+            total: [done, { $group: { _id: null, revenue: { $sum: '$total' }, orders: { $sum: 1 } } }],
+            methods: [done, { $group: { _id: '$method', amount: { $sum: '$total' }, orders: { $sum: 1 } } }],
+            byDay: [done, { $group: { _id: { $dateToString: { date: '$createdAt', format: '%Y-%m-%d', timezone: 'Africa/Dakar' } }, revenue: { $sum: '$total' }, orders: { $sum: 1 } } }],
+            top: [
+              done,
+              { $unwind: '$lines' },
+              { $group: { _id: '$lines.itemId', name: { $last: '$lines.name' }, qty: { $sum: '$lines.qty' }, revenue: { $sum: { $multiply: ['$lines.qty', '$lines.price'] } } } },
+              { $sort: { qty: -1, revenue: -1 } },
+              { $limit: SALES_TOP_ITEMS },
+            ],
+            statuses: [{ $group: { _id: '$status', n: { $sum: 1 } } }],
+            owed: [
+              { $match: { status: 'completed', method: { $ne: 'cash' }, payoutId: { $ne: null } } },
+              { $lookup: { from: 'payouts', localField: 'payoutId', foreignField: '_id', as: 'payout' } },
+              { $unwind: '$payout' },
+              { $match: { 'payout.status': { $ne: 'succeeded' } } },
+              { $group: { _id: null, amount: { $sum: '$payout.amount' } } },
+            ],
+          },
+        },
+      ])
+      .toArray();
+    const count = (st: OrderStatus[]) => f!.statuses.filter((x) => st.includes(x._id)).reduce((n, x) => n + x.n, 0);
+    const revenue = f!.total[0]?.revenue ?? 0;
+    const orders = f!.total[0]?.orders ?? 0;
+    const perDay = new Map(f!.byDay.map((d) => [d._id, d]));
+    return {
+      from,
+      to,
+      revenue,
+      orders,
+      average: orders ? Math.round(revenue / orders) : 0,
+      methods: ORDER_PAYMENT_METHODS.map((m) => {
+        const x = f!.methods.find((y) => y._id === m);
+        return { method: m, label: ORDER_PAYMENT_LABELS[m], amount: x?.amount ?? 0, orders: x?.orders ?? 0 };
+      }).filter((m) => m.orders > 0),
+      owed: f!.owed[0]?.amount ?? 0,
+      days: Array.from({ length: days }, (_, i) => {
+        const date = new Date(start.getTime() + i * DAY).toISOString().slice(0, 10);
+        return { date, revenue: perDay.get(date)?.revenue ?? 0, orders: perDay.get(date)?.orders ?? 0 };
+      }),
+      top: f!.top.map((t) => ({ itemId: t._id.toHexString(), name: t.name, qty: t.qty, revenue: t.revenue })),
+      inProgress: count(['placed', 'accepted', 'ready']),
+      refused: count(['refused']),
+      cancelled: count(['cancelled']),
+    };
   }
 
   async businessOrder(ref: BusinessRef, id: ObjectId) {

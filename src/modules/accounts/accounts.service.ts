@@ -91,8 +91,12 @@ export class AccountsService {
    * Sign-up step 1. A number whose account isn't a student's (someone given a role in a team, or on the app creator's
    * team) is not taken: sign-up completes that account (`existingAccount`), its roles stay.
    */
-  async availability(phone: string, studentNumber: string) {
-    const [phoneTaken, numberTaken, existing] = await Promise.all([this.repo.phoneExists(phone), this.repo.studentNumberExists(studentNumber), this.repo.findUserByPhone(phone)]);
+  async availability(phone: string, studentNumber: string | null) {
+    const [phoneTaken, numberTaken, existing] = await Promise.all([
+      this.repo.phoneExists(phone),
+      studentNumber ? this.repo.studentNumberExists(studentNumber) : Promise.resolve(false),
+      this.repo.findUserByPhone(phone),
+    ]);
     const completes = !!existing && !(await this.repo.findProfileByUserId(existing._id));
     const phoneConflict = phoneTaken && !completes;
     return {
@@ -127,7 +131,7 @@ export class AccountsService {
       try {
         await this.repo.insertProfile(this.newProfile(existing._id, input, now), session);
       } catch (err) {
-        if (isDuplicateKey(err, 'student_number_unique')) throw errors.conflict('STUDENT_NUMBER_TAKEN', 'Ce numéro étudiant a déjà un compte.');
+        if (isDuplicateKey(err, 'student_number_unique_when_set')) throw errors.conflict('STUDENT_NUMBER_TAKEN', 'Ce numéro étudiant a déjà un compte.');
         throw err;
       }
       return { ...updated!, linked: true };
@@ -388,6 +392,24 @@ export class AccountsService {
   }
 
   /** The student's own card was just read and its number is theirs: they may save their identity for a while. */
+  /**
+   * A student without a number gives theirs (on the profile, or from their own card read by the camera). Once set it
+   * doesn't change here (a typo is fixed by the UGB Campus team): `has-other` when the profile already has another.
+   */
+  async claimStudentNumber(userId: ObjectId, input: string): Promise<'set' | 'has-other'> {
+    const number = this.normalizeStudentNumber(input);
+    const profile = await this.repo.findProfileByUserId(userId);
+    if (!profile) throw errors.forbidden('Réservé aux étudiants.');
+    if (profile.studentNumber) return profile.studentNumber === number ? 'set' : 'has-other';
+    try {
+      await this.repo.profiles.updateOne({ _id: profile._id, studentNumber: null }, { $set: { studentNumber: number, updatedAt: this.clock.now() } });
+    } catch (err) {
+      if (isDuplicateKey(err, 'student_number_unique_when_set')) throw errors.conflict('STUDENT_NUMBER_TAKEN', 'Ce numéro étudiant est déjà utilisé par un autre compte. Écris à l’équipe UGB Campus si c’est le tien.');
+      throw err;
+    }
+    return 'set';
+  }
+
   async markCardRead(userId: ObjectId) {
     await this.repo.updateProfile(userId, { cardReadAt: this.clock.now() }, this.clock.now());
   }
@@ -456,7 +478,11 @@ export class AccountsService {
    * "NDIAYE Fatou" puts Fatou Ndiaye before the other Ndiayes. Accounts without a student profile are included
    * (an identity or bank card can be anyone's).
    */
-  async searchStudents(words: string[], limit = 20): Promise<StudentCard[]> {
+  /**
+   * Students whose names contain these words, best first. `exactWords`: only those with at least this many of the
+   * words as a whole name (a card read by the camera: two names really on it, never a stray word in the picture).
+   */
+  async searchStudents(words: string[], limit = 20, exactWords = 0): Promise<StudentCard[]> {
     const clean = [...new Set(words.map((w) => w.trim()).filter((w) => w.length >= 2))].slice(0, 6);
     if (!clean.length) return [];
     const users = await this.repo.findUsersByNames(clean.map(containing), 300);
@@ -467,8 +493,10 @@ export class AccountsService {
       .map((u) => {
         const names = `${u.firstName} ${u.lastName}`.split(/[\s'-]+/).map(fold);
         const score = wanted.reduce((n, w) => n + (names.includes(w) ? 2 : names.some((x) => x.includes(w)) ? 1 : 0), 0);
-        return { card: cardOf(u, profiles.get(u._id.toHexString()) ?? null), score };
+        const exact = wanted.filter((w) => names.includes(w)).length;
+        return { card: cardOf(u, profiles.get(u._id.toHexString()) ?? null), score, exact };
       })
+      .filter((x) => x.exact >= exactWords)
       .sort((a, b) => b.score - a.score || a.card.lastName.localeCompare(b.card.lastName) || a.card.firstName.localeCompare(b.card.firstName))
       .slice(0, limit)
       .map((x) => x.card);

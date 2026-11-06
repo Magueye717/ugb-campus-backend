@@ -58,6 +58,15 @@ export const alertsMigrations: DataMigration[] = [
     },
   },
   {
+    id: '2026-11-05-alerts-images',
+    description: 'An announcement keeps up to three photos (images) instead of one (image).',
+    async up(db) {
+      const alerts = db.collection('alerts');
+      await alerts.updateMany({ image: { $type: 'object' } }, [{ $set: { images: ['$image'] } }, { $unset: 'image' }]);
+      await alerts.updateMany({ image: { $exists: true } }, { $unset: { image: '' } });
+    },
+  },
+  {
     id: '2026-11-01-alerts-audience',
     description: 'Alerts get an audience; existing ones are for the whole university.',
     async up(db) {

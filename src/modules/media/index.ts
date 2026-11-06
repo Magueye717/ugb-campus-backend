@@ -21,7 +21,7 @@ export type { FileRef, MediaUsage } from './media.types.js';
 export const MEDIA_SWEEP_QUEUE = 'media.sweep';
 
 /** Uploaded files above this are refused before being read. */
-const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 
 export type MediaApi = Pick<MediaService, 'claim' | 'claimDocument' | 'release' | 'trackUsage'> & {
   registerRoutes(app: FastifyInstance): Promise<void>;
@@ -56,7 +56,7 @@ export function createMediaModule(d: { db: Db; clock: Clock; config: Config; lim
         const file = await req.file();
         if (!file) throw errors.validation('Ajoute une image.', { field: 'file' });
         const buf = await file.toBuffer().catch(() => {
-          throw errors.validation('Image trop lourde : 10 Mo au plus.', { field: 'file' });
+          throw errors.validation(`Image trop lourde : ${MAX_UPLOAD_BYTES / 1024 / 1024} Mo au plus.`, { field: 'file' });
         });
         const doc = await service.upload(toObjectId(actorOf(req).userId), req.query.purpose, buf, apiBase(req));
         return reply.status(201).send({ id: doc._id.toHexString(), url: doc.url, width: doc.width!, height: doc.height! });
@@ -72,17 +72,17 @@ export function createMediaModule(d: { db: Db; clock: Clock; config: Config; lim
           consumes: ['multipart/form-data'],
           description: 'Upload one PDF (field `file`, up to 10 MB), for an announcement (purpose alert). Kept as sent; attach it by `id` (`attachmentId`).',
           querystring: Type.Object({ purpose: Type.Enum(MEDIA_PURPOSES) }, { additionalProperties: false }),
-          response: { 201: Type.Object({ id: Type.String(), url: Type.String(), name: Type.String(), bytes: Type.Number() }) },
+          response: { 201: Type.Object({ id: Type.String(), url: Type.String(), name: Type.String(), bytes: Type.Number(), pages: Type.Union([Type.Integer(), Type.Null()]) }) },
         },
       },
       async (req, reply) => {
         const file = await req.file();
         if (!file) throw errors.validation('Ajoute un fichier.', { field: 'file' });
         const buf = await file.toBuffer().catch(() => {
-          throw errors.validation('Fichier trop lourd : 10 Mo au plus.', { field: 'file' });
+          throw errors.validation(`Fichier trop lourd : ${MAX_UPLOAD_BYTES / 1024 / 1024} Mo au plus.`, { field: 'file' });
         });
         const doc = await service.uploadDocument(toObjectId(actorOf(req).userId), req.query.purpose, buf, file.filename, apiBase(req));
-        return reply.status(201).send({ id: doc._id.toHexString(), url: doc.url, name: doc.name!, bytes: doc.bytes });
+        return reply.status(201).send({ id: doc._id.toHexString(), url: doc.url, name: doc.name!, bytes: doc.bytes, pages: doc.pages ?? null });
       },
     );
 

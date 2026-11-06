@@ -108,10 +108,10 @@ const toDakar: SeedStop[] = [['Louga · Station Total', 130], ['Kébémer · Car
 const fromDakar: SeedStop[] = [['Dakar · École normale', 0], ['Pikine · Station Total Bountou', 30], ['Fass Mbao · Arrêt ICS', 45], ['Rufisque · En face Sococim', 70], ['Diamniadio · Hôpital des enfants', 90], ['Thiès · Mairie', 135], ['Tivaouane · EDK', 165], ['Louga · Station Total', 225]];
 const toUgb: SeedStop[] = [['UGB · Entrée principale', 300], ['UGB · Village E', 310]];
 
-export const vehicles: { org: string; label: string; plate: string; capacity: number }[] = [
-  { org: 'khoule', label: 'Bus 64 places', plate: 'DK-4821-BF', capacity: 64 },
+export const vehicles: { org: string; label: string; plate: string; capacity: number; airConditioned?: boolean }[] = [
+  { org: 'khoule', label: 'Bus 64 places', plate: 'DK-4821-BF', capacity: 64, airConditioned: true },
   { org: 'khoule', label: 'Bus 64 places', plate: 'DK-5502-BF', capacity: 64 },
-  { org: 'globe', label: 'Bus 64 places', plate: 'DK-7710-AZ', capacity: 64 },
+  { org: 'globe', label: 'Bus 64 places', plate: 'DK-7710-AZ', capacity: 64, airConditioned: true },
   { org: 'amicale-zig', label: 'Bus 60 places', plate: 'ZG-1934-BC', capacity: 60 },
   { org: 'ndar', label: 'Minibus 32 places', plate: 'SL-2207-AC', capacity: 32 },
 ];

@@ -5,6 +5,10 @@ import type { Audience } from '../accounts/index.js';
 import type { FileRef } from '../media/index.js';
 
 export const ALERT_TONES = ['info', 'warning', 'danger', 'success'] as const;
+/** An announcement shows one PDF, or up to this many photos (not both). */
+export const ALERT_MAX_IMAGES = 3;
+/** A PDF the team didn't name: students read this, not its file name ("scan0042.pdf"). */
+export const DEFAULT_DOCUMENT_LABEL = 'Document officiel';
 export type AlertTone = (typeof ALERT_TONES)[number];
 
 /**
@@ -39,9 +43,11 @@ export type AlertDoc = {
   body: string;
   /** The whole text, on its own page (the body is the summary on the home screen). Missing: none. */
   details?: string;
-  /** A picture (a poster, a timetable) and a PDF (the full notice, a form), on its page. Missing: none. */
-  image?: ImageRef | null;
+  /** Photos (a poster, a timetable: up to ALERT_MAX_IMAGES) or a PDF (the full notice, a form), never both. Missing: none. */
+  images?: ImageRef[];
   attachment?: FileRef | null;
+  /** What students read for the PDF ("Liste des admis"); null: DEFAULT_DOCUMENT_LABEL. Its file name stays for the team. */
+  attachmentLabel?: string | null;
   /** Ionicons name (from an allowlist in the app). */
   icon: string;
   tone: AlertTone;
@@ -78,9 +84,11 @@ export type AlertInput = {
   body: string;
   /** Default "". */
   details?: string;
-  /** Undefined: unchanged (an update that doesn't touch them); null: removed. */
-  image?: ImageRef | null;
+  /** Undefined: unchanged (an update that doesn't touch them); [] / null: removed. */
+  images?: ImageRef[];
   attachment?: FileRef | null;
+  /** What students read for the PDF ("Liste des admis"); null: DEFAULT_DOCUMENT_LABEL. Its file name stays for the team. */
+  attachmentLabel?: string | null;
   icon: string;
   tone: AlertTone;
   href: string | null;

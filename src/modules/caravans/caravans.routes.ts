@@ -7,8 +7,9 @@ import { IdParams, Nullable, ObjectIdString, PhoneInput, toObjectId } from '../.
 import type { AuditApi } from '../audit/index.js';
 import type { OrgRole } from '../organizations/index.js';
 import { PAYMENT_METHODS, PaymentView, paymentView, PayoutView, payoutView } from '../payments/index.js';
+import { TICKET_PAYMENT_METHODS } from '../ticketing/index.js';
 import type { CaravansService } from './caravans.service.js';
-import { DIRECTIONS, MAX_SEATS_PER_STUDENT } from './caravans.types.js';
+import { DEFAULT_MAX_SEATS_PER_STUDENT, DIRECTIONS, MAX_SEATS_PER_STUDENT } from './caravans.types.js';
 
 const StopView = Type.Object({ stopId: Type.String(), place: Type.String(), at: Type.String() });
 const Organizer = Type.Object({ id: Type.String(), slug: Type.String(), name: Type.String(), category: Type.String(), level: Type.String(), rating: Nullable(Type.Number()), trips: Type.Number(), logoUrl: Nullable(Type.String()) });
@@ -38,7 +39,7 @@ const Base = {
 
 const DepartureView = Type.Object({
   ...Base,
-  vehicle: Type.Object({ label: Type.String(), plate: Nullable(Type.String({ description: 'Shown to ticket holders only.' })) }),
+  vehicle: Type.Object({ label: Type.String(), airConditioned: Type.Boolean(), plate: Nullable(Type.String({ description: 'Shown to ticket holders only (when the organizer gave one).' })) }),
   myTicketId: Nullable(Type.String()),
   purchasedHere: Type.Boolean({ description: 'I bought here and gave my own ticket away.' }),
   mySeatsLeft: Type.Number({ description: 'Seats I can still buy here (purchases count even once transferred).' }),
@@ -55,7 +56,10 @@ const DepartureView = Type.Object({
 
 const OrgDepartureView = Type.Object({
   ...Base,
-  vehicle: Type.Object({ label: Type.String(), plate: Type.String() }),
+  vehicle: Type.Object({ label: Type.String(), plate: Nullable(Type.String()), airConditioned: Type.Boolean() }),
+  vehicleId: Type.String({ description: 'To edit a draft.' }),
+  bookedStopIds: Type.Array(Type.String(), { description: 'Stops someone boards or gets off at: they stay.' }),
+  bookingClosesAt: Type.String(),
   stopsLeft: Type.Array(Type.Object({ stopId: Type.String(), at: Type.String() })),
   counts: Type.Object({ booked: Type.Number({ description: 'Valid tickets (seats).' }), buyers: Type.Number({ description: 'Students who bought them.' }), admitted: Type.Number() }),
   cancellation: Nullable(Type.Object({ at: Type.String(), reason: Type.String() })),
@@ -110,14 +114,16 @@ const DepartureInput = Type.Object(
     dropoffs: Type.Array(StopInput, { minItems: 1, maxItems: 15 }),
     price: Type.Integer({ minimum: 100, maximum: 100_000 }),
     maxSeatsPerStudent: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_SEATS_PER_STUDENT, description: 'Seats one student can buy (own + companions). Default 2.' })),
-    paymentMethods: Type.Optional(Type.Array(Type.Enum(PAYMENT_METHODS), { minItems: 1, maxItems: PAYMENT_METHODS.length, description: 'Wave, Orange Money or both (default: both).' })),
+    paymentMethods: Type.Optional(
+      Type.Array(Type.Enum(TICKET_PAYMENT_METHODS), { minItems: 1, maxItems: TICKET_PAYMENT_METHODS.length, description: 'Wave, Orange Money and/or cash (paid at boarding). Default: Wave and Orange Money.' }),
+    ),
     minPassengers: Type.Integer({ minimum: 0, maximum: 90 }),
     confirmBy: Type.Optional(Type.String({ format: 'date-time', description: 'Default: 24 h before departure.' })),
     bookingClosesAt: Type.Optional(Type.String({ format: 'date-time', description: 'Default: 30 min before departure.' })),
   },
   { additionalProperties: false },
 );
-const VehicleView = Type.Object({ id: Type.String(), label: Type.String(), plate: Type.String(), capacity: Type.Number(), seatsPerRow: Type.Number(), blockedSeats: Type.Array(Type.Number()) });
+const VehicleView = Type.Object({ id: Type.String(), label: Type.String(), plate: Nullable(Type.String()), airConditioned: Type.Boolean(), capacity: Type.Number(), seatsPerRow: Type.Number(), blockedSeats: Type.Array(Type.Number()) });
 
 const OrgParams = Type.Object({ orgId: ObjectIdString }, { additionalProperties: false });
 const OrgDepParams = Type.Object({ orgId: ObjectIdString, id: ObjectIdString }, { additionalProperties: false });
@@ -164,7 +170,7 @@ export function registerCaravansRoutes(root: FastifyInstance, { service, audit, 
       schema: {
         tags,
         params: IdParams,
-        response: { 200: Type.Object({ capacity: Type.Number(), seatsPerRow: Type.Number(), blocked: Type.Array(Type.Number()), taken: Type.Array(Type.Number()), suggested: Nullable(Type.Number()) }) },
+        response: { 200: Type.Object({ capacity: Type.Number(), seatsPerRow: Type.Number(), firstRowSeats: Type.Number({ description: 'Seats of the first row, on the right; then full rows. Numbered from the front.' }), blocked: Type.Array(Type.Number()), taken: Type.Array(Type.Number()), suggested: Nullable(Type.Number()) }) },
       },
     },
     async (req) => service.seatMap(toObjectId(req.params.id)),
@@ -199,17 +205,17 @@ export function registerCaravansRoutes(root: FastifyInstance, { service, audit, 
             ),
             pickupStopId: Type.String({ maxLength: 20 }),
             dropoffStopId: Type.String({ maxLength: 20 }),
-            method: Type.Enum(PAYMENT_METHODS),
+            method: Type.Enum(TICKET_PAYMENT_METHODS, { description: 'One the departure accepts. cash: the seats are booked at once, paid at boarding (payment is null).' }),
             returnUrl: Type.Optional(Type.String({ maxLength: 300 })),
           },
           { additionalProperties: false },
         ),
-        response: { 200: Type.Object({ booking: BookingView, payment: PaymentView }), 201: Type.Object({ booking: BookingView, payment: PaymentView }) },
+        response: { 200: Type.Object({ booking: BookingView, payment: Nullable(PaymentView) }), 201: Type.Object({ booking: BookingView, payment: Nullable(PaymentView) }) },
       },
     },
     async (req, reply) => {
       const { booking, payment, replay } = await service.book(me(req), toObjectId(req.params.id), req.body, baseUrlOf(req));
-      return reply.status(replay ? 200 : 201).send({ booking: await service.booking(me(req), booking._id), payment: paymentView(payment) });
+      return reply.status(replay ? 200 : 201).send({ booking: await service.booking(me(req), booking._id), payment: payment ? paymentView(payment) : null });
     },
   );
 
@@ -274,6 +280,7 @@ export function registerCaravansRoutes(root: FastifyInstance, { service, audit, 
             key: Type.Object({ kid: Type.String(), alg: Type.String(), x: Type.String({ description: 'Ed25519 public key (base64url) that checks ticket QR signatures.' }) }),
             versions: Type.Record(Type.String(), Type.Number(), { description: 'ticketId → current QR version (older ones were transferred away).' }),
             codes: Type.Record(Type.String(), Type.String(), { description: 'typed code → ticketId' }),
+            cash: Type.Record(Type.String(), Type.Number(), { description: 'ticketId → FCFA still to collect in cash at boarding.' }),
             manifest: ManifestView,
           }),
         },
@@ -293,10 +300,12 @@ export function registerCaravansRoutes(root: FastifyInstance, { service, audit, 
       schema: {
         tags: orgTags,
         params: Type.Object({ orgId: ObjectIdString, id: ObjectIdString, stopId: Type.String({ maxLength: 20 }) }, { additionalProperties: false }),
+        // No body when online; { leftAt } when sent later by a phone that was offline.
+        body: Type.Optional(Nullable(Type.Object({ leftAt: Type.Optional(Type.String({ format: 'date-time', description: 'Left offline: when (sent once the network is back).' })) }, { additionalProperties: false }))),
         response: { 200: Type.Object({ absent: Type.Array(Type.Object({ ticketId: Type.String(), seat: Nullable(Type.Number()) })) }) },
       },
     },
-    async (req) => service.leaveStop(toObjectId(req.params.orgId), toObjectId(req.params.id), req.params.stopId, me(req)),
+    async (req) => service.leaveStop(toObjectId(req.params.orgId), toObjectId(req.params.id), req.params.stopId, me(req), req.body?.leftAt ? new Date(req.body.leftAt) : undefined),
   );
 
   app.post(
@@ -309,15 +318,24 @@ export function registerCaravansRoutes(root: FastifyInstance, { service, audit, 
     },
   );
 
-  // ---- Organizer: vehicles and departures (web platform later; Swagger is the back office meanwhile) ----------
+  // ---- Organizer: vehicles and departures (created from the organizer space of the app) -----------------------
 
-  const vehicleView = (v: { _id: { toHexString(): string }; label: string; plate: string; capacity: number; seatsPerRow: number; blockedSeats: number[] }) => ({
-    id: v._id.toHexString(), label: v.label, plate: v.plate, capacity: v.capacity, seatsPerRow: v.seatsPerRow, blockedSeats: v.blockedSeats,
+  const vehicleView = (v: { _id: { toHexString(): string }; label: string; plate: string | null; airConditioned: boolean; capacity: number; seatsPerRow: number; blockedSeats: number[] }) => ({
+    id: v._id.toHexString(), label: v.label, plate: v.plate, airConditioned: v.airConditioned, capacity: v.capacity, seatsPerRow: v.seatsPerRow, blockedSeats: v.blockedSeats,
   });
 
-  app.get('/org/:orgId/vehicles', { ...org(managers), schema: { tags: orgTags, params: OrgParams, response: { 200: Type.Object({ items: Type.Array(VehicleView) }) } } }, async (req) => ({
-    items: (await service.listVehicles(toObjectId(req.params.orgId))).map(vehicleView),
-  }));
+  const Limits = Type.Object(
+    { maxSeatsPerStudent: Type.Number(), defaultSeatsPerStudent: Type.Number() },
+    { description: 'What the departure form allows: seats one student can buy (own + companions).' },
+  );
+  app.get(
+    '/org/:orgId/vehicles',
+    { ...org(managers), schema: { tags: orgTags, params: OrgParams, response: { 200: Type.Object({ items: Type.Array(VehicleView), limits: Limits }) } } },
+    async (req) => ({
+      items: (await service.listVehicles(toObjectId(req.params.orgId))).map(vehicleView),
+      limits: { maxSeatsPerStudent: MAX_SEATS_PER_STUDENT, defaultSeatsPerStudent: DEFAULT_MAX_SEATS_PER_STUDENT },
+    }),
+  );
 
   app.post(
     '/org/:orgId/vehicles',
@@ -329,9 +347,10 @@ export function registerCaravansRoutes(root: FastifyInstance, { service, audit, 
         body: Type.Object(
           {
             label: Type.String({ minLength: 2, maxLength: 60 }),
-            plate: Type.String({ minLength: 4, maxLength: 15, pattern: '^[A-Za-z0-9 -]+$' }),
+            plate: Type.Optional(Nullable(Type.String({ minLength: 4, maxLength: 15, pattern: '^[A-Za-z0-9 -]+$', description: 'Optional.' }))),
+            airConditioned: Type.Optional(Type.Boolean({ description: 'Shown to students ("Climatisé"). Default false.' })),
             capacity: Type.Integer({ minimum: 4, maximum: 90 }),
-            seatsPerRow: Type.Optional(Type.Integer({ minimum: 2, maximum: 6 })),
+            seatsPerRow: Type.Optional(Type.Integer({ minimum: 2, maximum: 6, description: '4 (default): 2 + aisle + 2. 5: with the folding middle seat (« versailler »).' })),
             blockedSeats: Type.Optional(Type.Array(Type.Integer({ minimum: 1 }), { maxItems: 20 })),
           },
           { additionalProperties: false },
@@ -341,6 +360,35 @@ export function registerCaravansRoutes(root: FastifyInstance, { service, audit, 
     },
     async (req, reply) => reply.status(201).send(vehicleView(await service.createVehicle(toObjectId(req.params.orgId), req.body))),
   );
+
+  const OrgVehicleParams = Type.Object({ orgId: ObjectIdString, id: ObjectIdString }, { additionalProperties: false });
+  app.put(
+    '/org/:orgId/vehicles/:id',
+    {
+      ...org(['owner']),
+      schema: {
+        tags: orgTags,
+        params: OrgVehicleParams,
+        body: Type.Object(
+          {
+            label: Type.String({ minLength: 2, maxLength: 60 }),
+            capacity: Type.Integer({ minimum: 4, maximum: 90 }),
+            airConditioned: Type.Boolean(),
+            seatsPerRow: Type.Optional(Type.Integer({ minimum: 2, maximum: 6, description: '4: 2 + aisle + 2. 5: with the folding middle seat (« versailler »).' })),
+          },
+          { additionalProperties: false, description: 'Drafts take the change; published departures keep the vehicle they were sold with.' },
+        ),
+        response: { 200: VehicleView },
+      },
+    },
+    async (req) => vehicleView(await service.updateVehicle(toObjectId(req.params.orgId), toObjectId(req.params.id), req.body)),
+  );
+
+  app.delete('/org/:orgId/vehicles/:id', { ...org(['owner']), schema: { tags: orgTags, params: OrgVehicleParams } }, async (req, reply) => {
+    await service.retireVehicle(toObjectId(req.params.orgId), toObjectId(req.params.id));
+    await audit.record({ actor: { type: 'user', id: actorOf(req).userId }, action: 'vehicle.retire', target: { type: 'vehicle', id: req.params.id }, requestId: req.id });
+    return reply.status(204).send();
+  });
 
   const orgView = async (orgId: string, id: { toHexString(): string }) => service.orgDeparture(toObjectId(orgId), toObjectId(id.toHexString()));
 
@@ -353,6 +401,33 @@ export function registerCaravansRoutes(root: FastifyInstance, { service, audit, 
     const d = await service.updateDeparture(toObjectId(req.params.orgId), toObjectId(req.params.id), req.body);
     return orgView(req.params.orgId, d._id);
   });
+
+  app.patch(
+    '/org/:orgId/departures/:id',
+    {
+      ...org(managers),
+      schema: {
+        tags: orgTags,
+        params: OrgDepParams,
+        description: 'Published, before the bus leaves: add stops, remove the ones nobody booked (never the departure), or a vehicle with as many seats or more.',
+        body: Type.Object(
+          {
+            pickups: Type.Optional(Type.Array(StopInput, { maxItems: 14, description: 'New pickups only (after the departure).' })),
+            dropoffs: Type.Optional(Type.Array(StopInput, { maxItems: 14, description: 'New drop-offs only.' })),
+            vehicleId: Type.Optional(ObjectIdString),
+            remove: Type.Optional(Type.Array(Type.String({ maxLength: 20 }), { maxItems: 30, description: 'stopIds to remove: only those not in bookedStopIds.' })),
+          },
+          { additionalProperties: false },
+        ),
+        response: { 200: OrgDepartureView },
+      },
+    },
+    async (req) => {
+      const d = await service.extendDeparture(toObjectId(req.params.orgId), toObjectId(req.params.id), req.body);
+      await audit.record({ actor: { type: 'user', id: actorOf(req).userId }, action: 'departure.extend', target: { type: 'departure', id: req.params.id }, requestId: req.id, metadata: { pickups: req.body.pickups?.length ?? 0, dropoffs: req.body.dropoffs?.length ?? 0, removed: req.body.remove ?? [], vehicle: !!req.body.vehicleId } });
+      return orgView(req.params.orgId, d._id);
+    },
+  );
 
   app.post('/org/:orgId/departures/:id/publish', { ...org(managers), schema: { tags: orgTags, params: OrgDepParams, response: { 200: OrgDepartureView } } }, async (req) => {
     const d = await service.publish(toObjectId(req.params.orgId), toObjectId(req.params.id));

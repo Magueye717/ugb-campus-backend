@@ -188,7 +188,7 @@ try {
     for (const v of vehicles) {
       const orgId = orgIds.get(v.org)!;
       const existing = await c.mongo.db.collection('vehicles').findOne({ plate: v.plate });
-      vehicleIds.set(v.plate, existing?._id ?? (await caravans.createVehicle(orgId, { label: v.label, plate: v.plate, capacity: v.capacity }))._id);
+      vehicleIds.set(v.plate, existing?._id ?? (await caravans.createVehicle(orgId, { label: v.label, plate: v.plate, capacity: v.capacity, airConditioned: v.airConditioned }))._id);
     }
     const now = Date.now();
     const iso = (min: number) => new Date(now + min * 60_000).toISOString();
@@ -211,7 +211,7 @@ try {
       for (const [phone, pi, di] of d.tickets ?? []) {
         const u = (await accounts.findByPhone(normalizePhone(phone)!))!;
         const { payment } = await caravans.book(u._id, created._id, { pickupStopId: `p${pi + 1}`, dropoffStopId: `d${di + 1}`, method: 'wave' }, `http://localhost:${config.PORT}`);
-        await caravanApp.inject({ method: 'POST', url: `/api/v1/dev/payment-simulator/${payment.reference}/pay`, headers: { 'content-type': 'text/plain' }, payload: '' });
+        if (payment) await caravanApp.inject({ method: 'POST', url: `/api/v1/dev/payment-simulator/${payment.reference}/pay`, headers: { 'content-type': 'text/plain' }, payload: '' });
         buyers.push(u.firstName);
       }
       log(`${d.from} → ${d.to} in ${Math.round(d.inMinutes / 60)} h · ${vehicle.plate}${buyers.length ? ` · tickets: ${buyers.join(', ')}` : ''}`);
@@ -281,8 +281,8 @@ try {
         const u = (await accounts.findByPhone(normalizePhone(phone)!))!;
         if (await taxi.activeTripOf(u._id)) continue;
         const { payment } = await taxi.join(u._id, trip._id, { method: 'wave' }, `http://localhost:${config.PORT}`);
-        // Paid through the simulator page, like a student would.
-        await app.inject({ method: 'POST', url: `/api/v1/dev/payment-simulator/${payment.reference}/pay`, headers: { 'content-type': 'text/plain' }, payload: '' });
+        // Paid through the simulator page, like a student would (a reservation without payment needs nothing more).
+        if (payment) await app.inject({ method: 'POST', url: `/api/v1/dev/payment-simulator/${payment.reference}/pay`, headers: { 'content-type': 'text/plain' }, payload: '' });
         joined.push(u.firstName);
       }
       log(`${org.firstName}: ${tr.from} → ${tr.to} in ${tr.leaveInMinutes} min, ${trip.seatPrice} FCFA/place${joined.length ? `, with ${joined.join(', ')}` : ''}`);

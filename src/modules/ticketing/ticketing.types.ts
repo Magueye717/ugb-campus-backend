@@ -1,6 +1,14 @@
 import type { ClientSession, ObjectId } from 'mongodb';
 
-import type { PaymentMethod } from '../payments/index.js';
+import { PAYMENT_METHODS } from '../payments/index.js';
+
+/**
+ * How a ticket is paid: in the app (Wave, Orange Money) or in cash, handed to the organizer at boarding or at the
+ * door. Each event / departure says which it accepts.
+ */
+export const TICKET_PAYMENT_METHODS = ['cash', ...PAYMENT_METHODS] as const;
+export type TicketPaymentMethod = (typeof TICKET_PAYMENT_METHODS)[number];
+export const TICKET_PAYMENT_LABELS: Record<TicketPaymentMethod, string> = { cash: 'Espèces', wave: 'Wave', orange_money: 'Orange Money' };
 
 /**
  * What a ticket admits to. Ticketing is generic: it issues, transfers, cancels and scans tickets; the module that
@@ -36,7 +44,10 @@ export type TicketDoc = {
   source: { type: 'caravan_booking' | 'event_booking'; id: ObjectId };
   /** Paid price, without fees: the base for refunds. */
   price: number;
-  paidWith: PaymentMethod;
+  /** `cash`: reserved now, the price handed over at boarding / the door (never refunded, never paid out by the app). */
+  paidWith: TicketPaymentMethod;
+  /** Cash tickets: when the organizer took the money (at the scan). Null: still to collect. */
+  cashCollectedAt?: Date | null;
   seat: number | null;
   /** Kind-specific data, read by the kind's handler only (caravan: pickup and drop-off stops). */
   details: Record<string, unknown>;
@@ -142,7 +153,7 @@ export type NewTicket = {
   purchaserUserId: ObjectId;
   source: TicketDoc['source'];
   price: number;
-  paidWith: PaymentMethod;
+  paidWith: TicketPaymentMethod;
   seat: number | null;
   details: Record<string, unknown>;
   passenger: TicketDoc['passenger'];

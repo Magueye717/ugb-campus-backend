@@ -11,6 +11,7 @@ import type { OrgRole } from '../organizations/index.js';
 import { PAYMENT_METHODS, PaymentView, paymentView, PayoutView, payoutView } from '../payments/index.js';
 import type { EventsService } from './events.service.js';
 import { EVENT_CATEGORIES, PUBLICATION_FEE } from './events.types.js';
+import { TICKET_PAYMENT_METHODS } from '../ticketing/index.js';
 
 const Organizer = Type.Object({ id: Type.String(), slug: Type.String(), name: Type.String(), category: Type.String(), level: Type.String(), rating: Nullable(Type.Number()), trips: Type.Number(), logoUrl: Nullable(Type.String()) });
 const Base = {
@@ -30,6 +31,7 @@ const Base = {
   salesOpen: Type.Boolean(),
   minPrice: Type.Number({ description: '0: free.' }),
   maxPerStudent: Type.Number(),
+  paymentMethods: Type.Array(Type.String({ description: 'wave | orange_money | cash' }), { description: 'How students may pay for this event.' }),
   cancellation: Nullable(Type.Object({ at: Type.String(), reason: Type.String() })),
   review: Nullable(Type.Object({ message: Type.String(), at: Type.String() }, { description: 'Student’s event: what the admins asked to correct, or why it was refused.' })),
 };
@@ -103,6 +105,9 @@ const EventInput = Type.Object(
       { minItems: 1, maxItems: 6 },
     ),
     maxPerStudent: Type.Optional(Type.Integer({ minimum: 1, maximum: 20, description: 'Tickets per student, all orders together. Default 4.' })),
+    paymentMethods: Type.Optional(
+      Type.Array(Type.Enum(TICKET_PAYMENT_METHODS), { minItems: 1, maxItems: TICKET_PAYMENT_METHODS.length, description: 'Wave, Orange Money and/or cash (paid at the door). Default: Wave and Orange Money.' }),
+    ),
   },
   { additionalProperties: false },
 );
@@ -138,7 +143,7 @@ export function registerEventsRoutes(root: FastifyInstance, { service, audit, re
         body: Type.Object(
           {
             items: Type.Array(Type.Object({ typeId: Type.String({ maxLength: 8 }), qty: Type.Integer({ minimum: 0, maximum: 20 }) }, { additionalProperties: false }), { minItems: 1, maxItems: 6 }),
-            method: Type.Enum(PAYMENT_METHODS),
+            method: Type.Enum(TICKET_PAYMENT_METHODS, { description: 'One the event accepts. cash: the tickets are issued at once, paid at the door (payment is null).' }),
             returnUrl: Type.Optional(Type.String({ maxLength: 300 })),
           },
           { additionalProperties: false },

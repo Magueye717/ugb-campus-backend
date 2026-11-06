@@ -18,6 +18,7 @@ export const taxiCollections: CollectionSpec[] = [
           seats: bson.int({ minimum: TAXI_SEATS.min, maximum: TAXI_SEATS.max }),
           fare: bson.int({ minimum: TAXI_FARE.min, maximum: TAXI_FARE.max }),
           seatPrice: bson.int({ minimum: 1 }),
+          payOnline: bson.bool,
           // The seat counter can never go past the taxi's seats, whatever the code does.
           seatsTaken: bson.int({ minimum: 0, maximum: TAXI_SEATS.max }),
           joinSeq: bson.int({ minimum: 0 }),

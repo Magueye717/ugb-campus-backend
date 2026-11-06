@@ -124,6 +124,8 @@ export function parseCard(text: string): { cardType: CardType | null; studentNum
   }
   const cardType = cardTypeOf(text, studentNumber);
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  // No card recognized (an empty table, a wall, a blur): no names either, nothing to search.
+  if (!cardType) return { cardType: null, studentNumber: null, names: [] };
   let names = cardType === 'bank' ? embossedName(lines) : labelledNames(lines);
   if (!names.length) names = lines.flatMap((l) => (/\d/.test(l) ? [] : nameWords(l)));
   return { cardType, studentNumber: cardType === 'student' ? studentNumber : null, names: [...new Set(names)].slice(0, 6) };
@@ -139,40 +141,79 @@ const KNOWN_NATIONALITIES: Record<string, string> = {
 /** "SAINT-LOUIS" → "Saint-Louis". */
 const titleCase = (s: string) => s.toLowerCase().replace(/(^|[\s'-])(\p{L})/gu, (_, sep: string, c: string) => sep + c.toUpperCase());
 
+/** A month written in letters (French or English, whole or cut short): its number. "JUIN" and "JUILLET" told apart. */
+const MONTHS: [RegExp, number][] = [
+  [/^JANV?|^JAN/, 1], [/^FEV|^FEB/, 2], [/^MARS?$|^MAR(CH)?/, 3], [/^AVR|^APR/, 4], [/^MAI$|^MAY$/, 5], [/^JUIN|^JUNE?$/, 6],
+  [/^JUIL|^JUL/, 7], [/^AOU|^AUG/, 8], [/^SEP/, 9], [/^OCT/, 10], [/^NOV/, 11], [/^DEC/, 12],
+];
+const monthOf = (word: string) => MONTHS.find(([re]) => re.test(word))?.[1];
+// The labels a card uses (French and English), to find what follows them, and never take one for a value.
+const BIRTH_DATE = /DATE\s*(?:ET\s*LIEU\s*)?DE\s*NAISS|DATE\s*NAISS|\bD\.?\s*NAISS|\bNEE?\s*(?:\(E\))?\s*LE\b|DATE\s*OF\s*BIRTH|\bBORN\b/;
+// Not « Date et lieu de naissance » (the date's label: its place comes after the date, « à … »).
+const BIRTH_PLACE = /(?<!ET\s*)LIEU\s*DE\s*NAISS|(?<!ET\s*)LIEU\s*NAISS|PLACE\s*OF\s*BIRTH/;
+const NATIONALITY = /NATIONALITE|NATIONALITY/;
+const ANY_LABEL = /NAISS|BIRTH|NATIONALIT|\bNOMS?\b|PRENOM|\bSEXE\b|\bUFR\b|FILIERE|NIVEAU|MATRICULE|\bN\s*°|ADRESSE|VALIDIT|EXPIR|ANNEE/;
+
+/** A day in a line of OCR: "12/03/2002", "12.03.2002", "12 03 2002", "12 mars 2002", "12032002" ("O"/"l" read for 0/1). */
+function datesIn(raw: string): { y: number; mo: number; d: number }[] {
+  // Letters read for digits, only where digits are around.
+  const s = fold(raw).replace(/[0-9OQIL|]{2,}/g, (tok) => (/\d/.test(tok) ? tok.replace(/[OQ]/g, '0').replace(/[IL|]/g, '1') : tok));
+  const out: { y: number; mo: number; d: number }[] = [];
+  for (const m of s.matchAll(/(\d{1,2})\s*[/.\- ]\s*(\d{1,2})\s*[/.\- ]\s*(\d{4})/g)) out.push({ d: Number(m[1]), mo: Number(m[2]), y: Number(m[3]) });
+  // In letters: "14 janvier 1993", "1er sept. 2001", "14 JANVIER 1993".
+  for (const m of s.matchAll(/(\d{1,2})\s*(?:ER)?\s+([A-Z]{3,9})\.?\s+(\d{4})/g)) {
+    const mo = monthOf(m[2]!);
+    if (mo) out.push({ d: Number(m[1]), mo, y: Number(m[3]) });
+  }
+  for (const m of s.matchAll(/(?<!\d)(\d{2})(\d{2})(\d{4})(?!\d)/g)) out.push({ d: Number(m[1]), mo: Number(m[2]), y: Number(m[3]) });
+  return out;
+}
+
 /**
- * Birth date, place of birth and nationality, behind their labels ("Date de naissance", "Né(e) le … à …", "Lieu de
- * naissance", "Nationalité"), on the same line or the next one. Dates come back as YYYY-MM-DD.
+ * Birth date, place of birth and nationality, behind their labels ("Date de naissance", "Date et lieu de naissance",
+ * "Né(e) le … à …", "Lieu de naissance", "Nationalité"), on the same line or the next ones. OCR often reads a card in
+ * blocks (all the labels, then all the values): a label is never taken for a value, and a birth date not found by its
+ * label is the card's date that fits a student's age (the oldest: the others are issue or validity dates).
+ * Dates come back as YYYY-MM-DD.
  */
 export function parseIdentity(text: string, now = new Date()): CardIdentity {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const isLabel = (l: string) => ANY_LABEL.test(fold(l)) && !/\d/.test(l);
+  /** What follows the label: the rest of its line, or the next line that isn't another label. */
   const after = (re: RegExp) => {
     for (let i = 0; i < lines.length; i++) {
       const m = fold(lines[i]!).match(re);
       if (!m) continue;
-      const rest = lines[i]!.slice(m.index! + m[0].length).replace(/^[\s:./-]+/, '').trim();
-      return rest || lines[i + 1] || null;
+      const rest = lines[i]!.slice(m.index! + m[0].length).replace(/^[\p{L}]*[\s:./()-]*/u, '').replace(/^[\s:./-]+/, '').trim();
+      if (rest && !isLabel(rest)) return rest;
+      const next = lines[i + 1];
+      return next && !isLabel(next) ? next : null;
     }
     return null;
   };
-  const toDate = (s: string | null) => {
-    const m = s?.match(/(\d{1,2})\s*[/.\- ]\s*(\d{1,2})\s*[/.\- ]\s*(\d{4})/);
-    if (!m) return null;
-    const [d, mo, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
-    const age = now.getFullYear() - y;
-    if (mo < 1 || mo > 12 || d < 1 || d > 31 || age < 14 || age > 80) return null;
-    return `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const plausible = (x: { y: number; mo: number; d: number }) => {
+    const age = now.getFullYear() - x.y;
+    return x.mo >= 1 && x.mo <= 12 && x.d >= 1 && x.d <= 31 && age >= 14 && age <= 80;
   };
-  // "Né(e) le 12/03/2002 à Saint-Louis": date and place on one line.
-  const born = after(/\bNEE?\s*(?:\(E\))?\s*LE\b/);
-  const birthDate = toDate(after(/DATE\s*DE\s*NAISSANCE|DATE\s*OF\s*BIRTH/)) ?? toDate(born);
-  const bornAt = born?.match(/\d{4}\s*(?:A|À)\s+(.+)$/i)?.[1] ?? null;
-  const placeRaw = after(/LIEU\s*DE\s*NAISSANCE|PLACE\s*OF\s*BIRTH/) ?? bornAt;
-  const place = placeRaw?.replace(/[^\p{L}' -]/gu, ' ').replace(/\s+/g, ' ').trim() ?? '';
-  const natRaw = after(/NATIONALITE|NATIONALITY/);
+  const iso = (x: { y: number; mo: number; d: number }) => `${x.y}-${String(x.mo).padStart(2, '0')}-${String(x.d).padStart(2, '0')}`;
+  const toDate = (s: string | null) => {
+    const x = s ? datesIn(s).find(plausible) : undefined;
+    return x ? iso(x) : null;
+  };
+  const labelled = after(BIRTH_DATE);
+  const oldest = datesIn(text)
+    .filter(plausible)
+    .sort((a, b) => a.y - b.y || a.mo - b.mo || a.d - b.d)[0];
+  const birthDate = toDate(labelled) ?? (oldest ? iso(oldest) : null);
+  // "Né(e) le 12/03/2002 à Saint-Louis", "Date et lieu de naissance : 12/03/2002 à Dakar": the place after the date.
+  const bornAt = labelled?.match(/\d{4}\s*(?:A|À|a|à)\s+(.+)$/)?.[1] ?? null;
+  const placeRaw = after(BIRTH_PLACE) ?? bornAt;
+  const place = placeRaw?.replace(/[^\p{L}' -]/gu, ' ').replace(/\s+/g, ' ').trim().replace(/^(?:à|a)\s+/i, '') ?? '';
+  const natRaw = after(NATIONALITY);
   const nat = natRaw?.match(/\p{L}[\p{L}-]{2,}/u)?.[0] ?? null;
   return {
     birthDate,
-    birthPlace: place.length >= 2 ? titleCase(place).slice(0, 60) : null,
-    nationality: nat ? (KNOWN_NATIONALITIES[fold(nat).replace(/-/g, '')] ?? titleCase(nat)) : null,
+    birthPlace: place.length >= 2 && !isLabel(place) ? titleCase(place).slice(0, 60) : null,
+    nationality: nat && !isLabel(nat) ? (KNOWN_NATIONALITIES[fold(nat).replace(/-/g, '')] ?? titleCase(nat)) : null,
   };
 }

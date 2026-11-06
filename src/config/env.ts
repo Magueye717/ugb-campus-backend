@@ -77,6 +77,11 @@ const EnvSchema = Type.Object({
    * path). Refused in production. Real adapters arrive with the merchant accounts (Q-1).
    */
   PAYMENTS_SIMULATOR: Bool,
+  /**
+   * Sunu Taxi seats paid in the app (Wave / Orange Money, refunds, the organizer's payout). Off: a seat is a
+   * reservation, the fare is settled in the taxi. Each trip keeps the rule it was created with.
+   */
+  TAXI_ONLINE_PAYMENT: Bool,
   /** HMAC secret of the simulated provider's webhooks. */
   SIMULATOR_WEBHOOK_SECRET: Type.Optional(Type.String({ minLength: 32 })),
   /**
@@ -113,12 +118,13 @@ const EnvSchema = Type.Object({
 
 type RawEnv = Type.Static<typeof EnvSchema>;
 
-export type Config = Omit<RawEnv, 'STAGING' | 'TRUST_PROXY' | 'DOCS_ENABLED' | 'OTP_DEV_MODE' | 'PAYMENTS_SIMULATOR' | 'SIMULATOR_WEBHOOK_SECRET' | 'JWT_PRIVATE_KEY_B64' | 'JWT_PUBLIC_KEY_B64' | 'OTP_PEPPER'> & {
+export type Config = Omit<RawEnv, 'STAGING' | 'TRUST_PROXY' | 'DOCS_ENABLED' | 'OTP_DEV_MODE' | 'PAYMENTS_SIMULATOR' | 'TAXI_ONLINE_PAYMENT' | 'SIMULATOR_WEBHOOK_SECRET' | 'JWT_PRIVATE_KEY_B64' | 'JWT_PUBLIC_KEY_B64' | 'OTP_PEPPER'> & {
   STAGING: boolean;
   TRUST_PROXY: boolean;
   DOCS_ENABLED: boolean;
   OTP_DEV_MODE: boolean;
   PAYMENTS_SIMULATOR: boolean;
+  TAXI_ONLINE_PAYMENT: boolean;
   SIMULATOR_WEBHOOK_SECRET: string;
   jwt: { privateKeyPem?: string; publicKeyPem?: string };
   OTP_PEPPER: string;
@@ -149,6 +155,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     DOCS_ENABLED: toBool(raw.DOCS_ENABLED),
     OTP_DEV_MODE: toBool(raw.OTP_DEV_MODE),
     PAYMENTS_SIMULATOR: toBool(raw.PAYMENTS_SIMULATOR),
+    TAXI_ONLINE_PAYMENT: toBool(raw.TAXI_ONLINE_PAYMENT),
     SIMULATOR_WEBHOOK_SECRET: raw.SIMULATOR_WEBHOOK_SECRET ?? DEV_SIMULATOR_SECRET,
     jwt: { privateKeyPem: decode(raw.JWT_PRIVATE_KEY_B64), publicKeyPem: decode(raw.JWT_PUBLIC_KEY_B64) },
     OTP_PEPPER: raw.OTP_PEPPER ?? DEV_PEPPER,
@@ -156,6 +163,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, overrides: Part
     ...overrides,
   };
   assertSmsSettings(config);
+  assertMediaSettings(config);
   assertProductionSafety(config);
   return config;
 }
@@ -168,6 +176,13 @@ function assertSmsSettings(c: Config) {
   if (c.TWILIO_API_KEY_SID ? !c.TWILIO_API_KEY_SECRET : !c.TWILIO_AUTH_TOKEN) missing.push(c.TWILIO_API_KEY_SID ? 'TWILIO_API_KEY_SECRET' : 'TWILIO_API_KEY_SID + TWILIO_API_KEY_SECRET (or TWILIO_AUTH_TOKEN)');
   if (!c.TWILIO_FROM && !c.TWILIO_MESSAGING_SERVICE_SID) missing.push('TWILIO_FROM (or TWILIO_MESSAGING_SERVICE_SID)');
   if (missing.length) throw new Error(`Invalid configuration: SMS_PROVIDER=twilio needs ${missing.join(', ')}`);
+}
+
+/** S3 storage without its keys would boot, then fail every upload with a 500: refuse to boot instead (names only). */
+function assertMediaSettings(c: Config) {
+  if (c.MEDIA_STORAGE !== 's3') return;
+  const missing = (['S3_BUCKET', 'MEDIA_PUBLIC_URL', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'] as const).filter((k) => !c[k]);
+  if (missing.length) throw new Error(`Invalid configuration: MEDIA_STORAGE=s3 needs ${missing.join(', ')} (or MEDIA_STORAGE=local)`);
 }
 
 /** Development conveniences must never reach production: refuse to boot instead. */

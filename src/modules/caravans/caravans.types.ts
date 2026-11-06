@@ -1,6 +1,7 @@
 import type { ObjectId } from 'mongodb';
 
 import type { PaymentMethod } from '../payments/index.js';
+import type { TicketPaymentMethod } from '../ticketing/index.js';
 
 export const DIRECTIONS = ['aller', 'retour'] as const;
 export type Direction = (typeof DIRECTIONS)[number];
@@ -11,8 +12,10 @@ export type VehicleDoc = {
   orgId: ObjectId;
   /** "Bus 64 places" */
   label: string;
-  /** Normalized, unique: "DK-4821-BF". */
-  plate: string;
+  /** Optional (the app doesn't ask for it). Normalized, unique when set: "DK-4821-BF". */
+  plate: string | null;
+  /** Shown to students on the trip ("Climatisé"). */
+  airConditioned: boolean;
   capacity: number;
   /** Seats per row, for the seat map (and window seats: first and last of each row). */
   seatsPerRow: number;
@@ -40,7 +43,7 @@ export type DepartureDoc = {
   orgId: ObjectId;
   vehicleId: ObjectId;
   /** Snapshot at publication: later edits to the vehicle don't change a sold trip. */
-  vehicle: { label: string; plate: string; capacity: number; seatsPerRow: number; blockedSeats: number[] };
+  vehicle: { label: string; plate: string | null; airConditioned: boolean; capacity: number; seatsPerRow: number; blockedSeats: number[] };
   direction: Direction;
   /** Cities shown on the card ("UGB", "Dakar"). */
   from: string;
@@ -54,7 +57,8 @@ export type DepartureDoc = {
   /** Seats one student can buy on this trip (their own + companions). Set by the organizer, 2 by default. */
   maxSeatsPerStudent: number;
   /** The providers the organizer accepts for this trip (Wave, Orange Money, or both). */
-  paymentMethods: PaymentMethod[];
+  /** Wave, Orange Money, cash (handed over at boarding): the organizer's choice. */
+  paymentMethods: TicketPaymentMethod[];
   /** Confirmed seats needed for the trip to go ahead; below that at `confirmBy`, everyone is refunded. */
   minPassengers: number;
   confirmBy: Date;
@@ -105,7 +109,7 @@ export type BookingDoc = {
   dropoffStopId: string;
   /** Copied from the departure on the server: the app never sets a price. */
   price: number;
-  method: PaymentMethod;
+  method: TicketPaymentMethod;
   status: BookingStatus;
   /** True while held or confirmed: the seat is taken (unique per departure). */
   seatActive: boolean;
@@ -129,6 +133,8 @@ export const MAX_SEATS_PER_STUDENT = 10;
 export const HOLD_MIN = 10;
 /** Bookings close this long before departure (default). */
 export const BOOKING_CLOSE_MIN = 30;
+/** Seats in the first row, on the right (the door and the driver take the left): the seat map starts with them. */
+export const FIRST_ROW_SEATS = 2;
 /** Free cancellation until 24 h before departure, then 10 % (the app's rule). */
 export const FREE_CANCEL_MS = 24 * 60 * 60 * 1000;
 export const LATE_CANCEL_FEE = 0.1;

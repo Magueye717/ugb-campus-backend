@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { bearer, createStaff, createTestApp, json, registerStudent, type TestApp } from '../../../../test/harness.js';
+import { bearer, createStaff, createTestApp, json, nextPhone, registerStudent, type TestApp } from '../../../../test/harness.js';
 
 let t: TestApp;
 let admin: Awaited<ReturnType<typeof createStaff>>;
@@ -134,5 +134,48 @@ describe('spaces and organizer roles', () => {
     await call('PUT', `/admin/organizations/${orgId}/members`, admin.tokens.accessToken, { phone: s.phone, roles: ['manager'], space: 'organizer' });
     const entry = await t.c.mongo.db.collection('auditLogs').findOne({ action: 'membership.set', 'target.id': orgId });
     expect(entry?.actor).toMatchObject({ type: 'user', id: admin.userId.toHexString() });
+  });
+});
+
+describe('Référencement: caravan organizers', () => {
+  it('a caravan editor registers an organizer and its owner, who gets the organizer space; others are refused', async () => {
+    const editor = await createStaff(t, ['caravan_editor']);
+    const shopEditor = await createStaff(t, ['shop_editor']);
+    const tok = editor.tokens.accessToken;
+    expect((await call('GET', '/admin/caravan-organizers', shopEditor.tokens.accessToken)).statusCode).toBe(403);
+
+    const phone = nextPhone();
+    expect(json(await call('POST', '/admin/caravan-organizers/owner-lookup', tok, { phone }))).toEqual({ account: null, organizer: null });
+    // A new number: the name is needed to create the account.
+    expect((await call('POST', '/admin/caravan-organizers', tok, { name: 'Ndiambour Voyages', category: 'Transporteur', owner: { phone } })).statusCode).toBe(400);
+    const res = await call('POST', '/admin/caravan-organizers', tok, { name: 'Ndiambour Voyages', category: 'Transporteur', owner: { phone, firstName: 'Ibrahima', lastName: 'Fall' } });
+    expect(res.statusCode).toBe(201);
+    const org = json(res);
+    expect(org).toMatchObject({ name: 'Ndiambour Voyages', category: 'Transporteur', capabilities: ['caravans'], level: 'verifie', hasPayoutAccount: true, owner: { firstName: 'Ibrahima', lastName: 'Fall' } });
+    expect(json(await call('GET', '/admin/caravan-organizers', tok)).items.map((x: { id: string }) => x.id)).toContain(org.id);
+
+    // Same number again: it already runs caravans.
+    expect(json(await call('POST', '/admin/caravan-organizers', tok, { name: 'Autre', category: 'Entreprise', owner: { phone } })).code).toBe('ALREADY_ORGANIZER');
+    expect(json(await call('POST', '/admin/caravan-organizers/owner-lookup', tok, { phone }))).toMatchObject({ account: { firstName: 'Ibrahima' }, organizer: { name: 'Ndiambour Voyages' } });
+
+    const edited = json(await call('PATCH', `/admin/caravan-organizers/${org.id}`, tok, { name: 'Ndiambour Voyages SA', category: 'Entreprise', level: 'confirme' }));
+    expect(edited).toMatchObject({ name: 'Ndiambour Voyages SA', category: 'Entreprise', level: 'confirme' });
+  });
+
+  it('a caravan organizer is its own organization: never joined to the shop its owner runs, and a shop never joins it', async () => {
+    const editor = await createStaff(t, ['caravan_editor', 'shop_editor']);
+    const tok = editor.tokens.accessToken;
+    const phone = nextPhone();
+    const shop = await call('POST', '/admin/businesses', tok, {
+      kind: 'shop', name: 'Papeterie du Campus', specialties: ['Fournitures'], owner: { phone, firstName: 'Awa', lastName: 'Sarr' },
+    });
+    expect(shop.statusCode).toBe(201);
+    expect(json(await call('POST', '/admin/caravan-organizers/owner-lookup', tok, { phone }))).toEqual({ account: { firstName: 'Awa', lastName: 'Sarr' }, organizer: null });
+    const org = json(await call('POST', '/admin/caravan-organizers', tok, { name: 'Sarr Voyages', category: 'Transporteur', owner: { phone } }));
+    expect(org).toMatchObject({ name: 'Sarr Voyages', capabilities: ['caravans'] });
+    expect(org.id).not.toBe(json(shop).orgId);
+    // The shop side doesn't see the caravan organizer as an entity to join.
+    const lookup = json(await call('POST', '/admin/businesses/owner-lookup', tok, { phone }));
+    expect(lookup.entities.map((e: { name: string }) => e.name)).not.toContain('Sarr Voyages');
   });
 });

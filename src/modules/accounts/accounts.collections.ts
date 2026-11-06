@@ -41,7 +41,7 @@ export const accountsCollections: CollectionSpec[] = [
       $jsonSchema: bson.object(
         {
           userId: bson.objectId,
-          studentNumber: bson.string({ pattern: '^P\\d{6,11}$' }),
+          studentNumber: bson.nullable(bson.string({ pattern: '^P\\d{6,11}$' })),
           campus: bson.enumOf(CAMPUSES),
           onCampus: bson.bool,
           village: { bsonType: ['string', 'null'] },
@@ -56,7 +56,8 @@ export const accountsCollections: CollectionSpec[] = [
     },
     indexes: [
       { key: { userId: 1 }, options: { name: 'user_unique', unique: true } },
-      { key: { studentNumber: 1 }, options: { name: 'student_number_unique', unique: true } },
+      // Optional: unique only among the profiles that have one.
+      { key: { studentNumber: 1 }, options: { name: 'student_number_unique_when_set', unique: true, partialFilterExpression: { studentNumber: { $type: 'string' } } } },
       { key: { academicGroupIds: 1 }, options: { name: 'academic_groups' } },
       { key: { campus: 1 }, options: { name: 'campus' } },
       // Announcements for one UFR or one region: who to notify.
@@ -67,6 +68,15 @@ export const accountsCollections: CollectionSpec[] = [
 ];
 
 export const accountsMigrations: DataMigration[] = [
+  {
+    id: '2026-11-06-student-number-optional',
+    description: 'The student number becomes optional (added after sign-up): unique only when set; the old unique index goes.',
+    async up(db) {
+      const profiles = db.collection('studentProfiles');
+      const indexes = await profiles.indexes();
+      if (indexes.some((ix) => ix.name === 'student_number_unique')) await profiles.dropIndex('student_number_unique');
+    },
+  },
   {
     id: '2026-10-31-users-email-avatar-location',
     description: 'Give existing users the new optional fields: email, avatar, lastLocation (null).',

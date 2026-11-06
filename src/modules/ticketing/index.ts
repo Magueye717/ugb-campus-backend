@@ -17,7 +17,8 @@ import { TicketingService } from './ticketing.service.js';
 
 export { ticketingCollections, ticketingMigrations };
 export { EventSummaryView, TicketView } from './ticketing.routes.js';
-export type { AdmissionCheck, CancellationQuote, EventSummary, TicketDoc, TicketKindHandler } from './ticketing.types.js';
+export type { AdmissionCheck, CancellationQuote, EventSummary, TicketDoc, TicketKindHandler, TicketPaymentMethod } from './ticketing.types.js';
+export { TICKET_PAYMENT_LABELS, TICKET_PAYMENT_METHODS } from './ticketing.types.js';
 
 export const TICKET_TRANSFERS_SWEEP_QUEUE = 'tickets.transfers-sweep';
 

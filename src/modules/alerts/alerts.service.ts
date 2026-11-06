@@ -5,7 +5,7 @@ import { errors } from '../../platform/http/errors.js';
 import type { Audience, AudienceProfile } from '../accounts/index.js';
 import type { MediaApi } from '../media/index.js';
 import type { NotificationsApi } from '../notifications/index.js';
-import type { AlertDoc, AlertInput, AlertKind, AlertStatus, AlertTone, RaisedAlert } from './alerts.types.js';
+import { ALERT_MAX_IMAGES, DEFAULT_DOCUMENT_LABEL, type AlertDoc, type AlertInput, type AlertKind, type AlertStatus, type AlertTone, type RaisedAlert } from './alerts.types.js';
 
 const everyone = (a: Audience) => !a.campuses.length && !a.ufrs.length && !a.regions.length;
 
@@ -37,8 +37,11 @@ export const alertView = (a: AlertDoc) => ({
   title: a.title,
   body: a.body,
   details: a.details ?? '',
-  image: a.image?.url ?? null,
-  attachment: a.attachment ? { url: a.attachment.url, name: a.attachment.name, bytes: a.attachment.bytes } : null,
+  images: (a.images ?? []).map((i) => i.url),
+  /** Apps before multiple photos: the first one. */
+  image: a.images?.[0]?.url ?? null,
+  // Students get what it is, its size and pages, not its file name (kept for the team, in adminView).
+  attachment: a.attachment ? { url: a.attachment.url, label: a.attachmentLabel || DEFAULT_DOCUMENT_LABEL, bytes: a.attachment.bytes, pages: a.attachment.pages ?? null } : null,
   icon: a.icon,
   tone: a.tone,
   href: a.href,
@@ -77,6 +80,9 @@ export class AlertsService {
     const open = status === 'scheduled' || status === 'live';
     return {
       ...alertView(a),
+      attachment: a.attachment ? { url: a.attachment.url, label: a.attachmentLabel || DEFAULT_DOCUMENT_LABEL, bytes: a.attachment.bytes, pages: a.attachment.pages ?? null, name: a.attachment.name } : null,
+      attachmentLabel: a.attachmentLabel ?? null,
+      imageIds: (a.images ?? []).map((i) => i.mediaId.toHexString()),
       status,
       push: a.push,
       pushedAt: a.pushedAt?.toISOString() ?? null,
@@ -109,7 +115,7 @@ export class AlertsService {
     if (!canEdit(editor, input.kind)) throw errors.forbidden('Tu ne peux publier que les annonces de ton équipe.');
     this.check(input);
     const now = this.clock.now();
-    const doc: AlertDoc = { _id: new ObjectId(), ...input, details: input.details ?? '', image: input.image ?? null, attachment: input.attachment ?? null, sourceKey: null, pushedAt: null, withdrawnAt: null, createdBy: editor.userId, updatedBy: editor.userId, createdAt: now, updatedAt: now };
+    const doc: AlertDoc = { _id: new ObjectId(), ...input, details: input.details ?? '', images: input.images ?? [], attachment: input.attachment ?? null, attachmentLabel: input.attachmentLabel ?? null, sourceKey: null, pushedAt: null, withdrawnAt: null, createdBy: editor.userId, updatedBy: editor.userId, createdAt: now, updatedAt: now };
     await this.alerts.insertOne(doc);
     await this.pushIfDue(doc);
     return (await this.alerts.findOne({ _id: doc._id }))!;
@@ -125,14 +131,15 @@ export class AlertsService {
     if (status === 'ended' || status === 'withdrawn') throw errors.conflict('ALERT_CLOSED', 'Cette alerte est terminée ou retirée.');
     // Already online: it stays online from when it started.
     const startsAt = status === 'live' ? a.startsAt : input.startsAt;
-    this.check({ ...input, startsAt });
+    const { images, attachment, ...rest } = input;
+    this.check({ ...input, images: images ?? a.images ?? [], attachment: attachment !== undefined ? attachment : (a.attachment ?? null), startsAt });
     const now = this.clock.now();
-    const { image, attachment, ...rest } = input;
-    const set = { ...rest, ...(image !== undefined ? { image } : {}), ...(attachment !== undefined ? { attachment } : {}), startsAt, updatedBy: editor.userId, updatedAt: now };
+    const set = { ...rest, ...(images !== undefined ? { images } : {}), ...(attachment !== undefined ? { attachment } : {}), startsAt, updatedBy: editor.userId, updatedAt: now };
     const updated = (await this.alerts.findOneAndUpdate({ _id: id }, { $set: set }, { returnDocument: 'after' }))!;
     // A picture or a PDF replaced or removed: the old file leaves the storage.
     const dropped = (next: { mediaId: ObjectId } | null | undefined, old: { mediaId: ObjectId } | null | undefined) => (next !== undefined && old && !next?.mediaId.equals(old.mediaId) ? old.mediaId : null);
-    await this.media.release([dropped(image, a.image), dropped(attachment, a.attachment)]);
+    const goneImages = images === undefined ? [] : (a.images ?? []).filter((o) => !images.some((n) => n.mediaId.equals(o.mediaId))).map((o) => o.mediaId);
+    await this.media.release([...goneImages, dropped(attachment, a.attachment)]);
     await this.pushIfDue(updated);
     return (await this.alerts.findOne({ _id: id }))!;
   }
@@ -148,6 +155,8 @@ export class AlertsService {
   private check(input: Omit<AlertInput, 'kind'>) {
     if (input.endsAt <= input.startsAt || input.endsAt <= this.clock.now()) throw errors.validation('La fin doit être après le début, et à venir.', { field: 'endsAt' });
     if (input.placement === 'headline' && !input.tag) throw errors.validation('Une annonce « À la une » a une étiquette (Élections, Bourses…).', { field: 'tag' });
+    if ((input.images?.length ?? 0) > ALERT_MAX_IMAGES) throw errors.validation(`${ALERT_MAX_IMAGES} photos au plus.`, { field: 'imageIds' });
+    if (input.images?.length && input.attachment) throw errors.validation('Un PDF ou des photos, pas les deux.', { field: 'attachmentId' });
   }
 
   /**

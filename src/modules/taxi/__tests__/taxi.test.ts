@@ -5,7 +5,7 @@ import { bearer, createTestApp, json, registerStudent, T0, type TestApp } from '
 
 let t: TestApp;
 beforeAll(async () => {
-  t = await createTestApp({ PAYMENTS_SIMULATOR: 'true' });
+  t = await createTestApp({ PAYMENTS_SIMULATOR: 'true', TAXI_ONLINE_PAYMENT: 'true' });
 });
 afterAll(async () => t.close());
 
@@ -286,6 +286,29 @@ describe('meeting point, departure and claim', () => {
     await t.c.modules.taxi.service.sweep();
     expect(json(await call(org, 'GET', '/taxi/me')).activeTripId).toBeNull();
     expect(trip.id).toBeTruthy();
+  });
+
+  it('without the sweep: a trip of mine past its time no longer stops me proposing or joining another', async () => {
+    t.clock.set(T0);
+    const org = await registerStudent(t);
+    const old = await newTrip(org, { leaveInMinutes: 30, lockMinutes: undefined });
+    // Still within its grace: it blocks.
+    t.clock.advance(40 * MIN);
+    expect(json(await call(org, 'POST', '/taxi/trips', { from: 'UGB · Village A', to: 'Saint-Louis · Sor', seats: 3, fare: 2000, leaveInMinutes: 60 }))).toMatchObject({ code: 'ALREADY_IN_TRIP', tripId: old.id });
+    // Past it (no sweep ran): off the board, and freed as soon as I propose another.
+    t.clock.advance(10 * MIN);
+    expect((await call(org, 'GET', '/taxi/trips')).body).not.toContain(old.id);
+    const fresh = await newTrip(org, { leaveInMinutes: 60 });
+    expect(json(await call(org, 'GET', '/taxi/me')).activeTripId).toBe(fresh.id);
+
+    // Same when joining someone else's.
+    const passenger = await registerStudent(t);
+    const first = await newTrip(await registerStudent(t), { leaveInMinutes: 20, lockMinutes: undefined });
+    await joinAndPay(passenger, first.id);
+    t.clock.advance(40 * MIN);
+    const other = await newTrip(await registerStudent(t), { leaveInMinutes: 60 });
+    await joinAndPay(passenger, other.id);
+    expect(json(await call(passenger, 'GET', '/taxi/me')).activeTripId).toBe(other.id);
   });
 });
 

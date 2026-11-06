@@ -44,12 +44,13 @@ export type OrganizationsApi = OrganizationsPort & {
   personalOrg(user: { _id: ObjectId; firstName: string; lastName: string; phone: string }, create?: boolean): Promise<ObjectId | null>;
   isPersonal(orgId: ObjectId): Promise<boolean>;
   /** The entities this person owns (active ones), and whether each is a student's own. */
+  /** The entities a restaurant or a shop can join. Never a caravan organizer: caravans are a space of their own. */
   ownedBy(userId: ObjectId): Promise<{ orgId: ObjectId; name: string; personal: boolean; organizer: boolean }[]>;
   /** Adds a finished trip to the organizer's count ("128 trajets effectués"). */
   countTrip(orgId: ObjectId): Promise<void>;
   /** The students' average rating of its trips and events (ratings module). */
   setRating(orgId: ObjectId, avg: number | null, count: number): Promise<void>;
-  registerRoutes(app: FastifyInstance, requireAdmin: preHandlerHookHandler): void;
+  registerRoutes(app: FastifyInstance, requireAdmin: preHandlerHookHandler, requireCaravanEditor: preHandlerHookHandler): void;
 };
 
 /** Organization logos. The media module deletes a picture once none of these reference it. */
@@ -91,7 +92,7 @@ export function createOrganizationsModule(deps: { db: Db; clock: Clock; accounts
     },
     isPersonal: async (orgId) => (await service.get(orgId).catch(() => null))?.category === 'Étudiant',
     ownedBy: async (userId) => {
-      const owned = (await service.membershipsForUser(userId)).filter((m) => m.roles.includes('owner'));
+      const owned = (await service.membershipsForUser(userId)).filter((m) => m.roles.includes('owner') && !m.capabilities.includes('caravans'));
       const byOrg = new Map(owned.map((m) => [m.orgId, { orgId: new ObjectId(m.orgId), name: m.name, personal: m.category === 'Étudiant', organizer: m.capabilities.includes('caravans') || m.capabilities.includes('events') }]));
       return [...byOrg.values()];
     },
@@ -102,6 +103,6 @@ export function createOrganizationsModule(deps: { db: Db; clock: Clock; accounts
     countTrip: (orgId) => service.countTrip(orgId),
     setRating: (orgId, avg, count) => service.setRating(orgId, avg, count),
     requireOrgRole,
-    registerRoutes: (app, requireAdmin) => registerOrganizationsRoutes(app, { service, audit: deps.audit, requireAdmin, requireOrgRole }),
+    registerRoutes: (app, requireAdmin, requireCaravanEditor) => registerOrganizationsRoutes(app, { service, audit: deps.audit, requireAdmin, requireCaravanEditor, requireOrgRole }),
   };
 }

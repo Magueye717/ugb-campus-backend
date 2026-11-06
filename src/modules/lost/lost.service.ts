@@ -118,11 +118,12 @@ export class LostService {
 
   private async views(docs: LostItemDoc[], viewerId: ObjectId) {
     const mine = docs.length ? await this.claims.find({ itemId: { $in: docs.map((d) => d._id) }, otherId: viewerId }).toArray() : [];
-    const counts = new Map<string, number>();
+    // Declarer: the conversations opened about each item (their chats' unread counts are shown on it).
+    const claimsOf = new Map<string, string[]>();
     const declared = docs.filter((d) => d.declaredBy.equals(viewerId)).map((d) => d._id);
     if (declared.length) {
-      for (const row of await this.claims.aggregate<{ _id: ObjectId; n: number }>([{ $match: { itemId: { $in: declared } } }, { $group: { _id: '$itemId', n: { $sum: 1 } } }]).toArray()) {
-        counts.set(row._id.toHexString(), row.n);
+      for (const row of await this.claims.aggregate<{ _id: ObjectId; ids: ObjectId[] }>([{ $match: { itemId: { $in: declared } } }, { $group: { _id: '$itemId', ids: { $push: '$_id' } } }]).toArray()) {
+        claimsOf.set(row._id.toHexString(), row.ids.map((id) => id.toHexString()));
       }
     }
     return docs.map((d) => {
@@ -152,7 +153,8 @@ export class LostService {
         isOwner,
         secret: isDeclarer ? d.secret : null,
         myClaimId: my?._id.toHexString() ?? null,
-        conversationsCount: isDeclarer ? (counts.get(d._id.toHexString()) ?? 0) : 0,
+        conversationsCount: isDeclarer ? (claimsOf.get(d._id.toHexString())?.length ?? 0) : 0,
+        claimIds: isDeclarer ? (claimsOf.get(d._id.toHexString()) ?? []) : [],
       };
     });
   }
@@ -328,7 +330,8 @@ export class LostService {
     // A student card's number gives its owner; otherwise (no number, another card) the names read are searched.
     const { cardType, studentNumber, names } = parseCard(text);
     const owner = studentNumber ? await this.accounts.studentByNumber(studentNumber) : null;
-    const candidates = owner ? [] : await this.accounts.searchStudents(names);
+    // Without the number: only students with two of the names read (first and last name), never a single stray word.
+    const candidates = owner || names.length < 2 ? [] : await this.accounts.searchStudents(names, 20, 2);
     return { cardType, studentNumber, names, owner: owner ? this.match(owner) : null, candidates: candidates.filter((c) => !c.userId.equals(userId)).map((c) => this.match(c)) };
   }
 
@@ -350,7 +353,10 @@ export class LostService {
     // The card's student number must be the student's own: then (only then) its details can fill their profile.
     if (!studentNumber) throw errors.validation('Numéro étudiant illisible : reprends la photo bien à plat, avec de la lumière.', { field: 'file' });
     const owner = await this.accounts.studentByNumber(studentNumber);
-    if (!owner || !owner.userId.equals(userId)) throw errors.conflict('NOT_YOUR_CARD', `Cette carte (${studentNumber}) n’est pas la tienne : photographie ta propre carte étudiant.`);
+    const notMine = () => errors.conflict('NOT_YOUR_CARD', `Cette carte (${studentNumber}) n’est pas la tienne : scanne ta propre carte étudiant.`);
+    if (owner && !owner.userId.equals(userId)) throw notMine();
+    // A student who hasn't given their number yet: their own card gives it (only if no one else has it).
+    if (!owner && (await this.accounts.claimStudentNumber(userId, studentNumber)) === 'has-other') throw notMine();
     await this.accounts.markCardRead(userId);
     return { matched: 'number' as const, studentNumber, ...parseIdentity(text, this.clock.now()) };
   }

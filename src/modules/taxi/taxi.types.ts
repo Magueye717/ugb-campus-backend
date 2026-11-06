@@ -50,6 +50,8 @@ export type TaxiTripDoc = {
   departedAt: Date | null;
   cancelledAt: Date | null;
   claimPayoutId: ObjectId | null;
+  /** Seats paid in the app (TAXI_ONLINE_PAYMENT when it was proposed). Missing: trips from before, all paid. */
+  payOnline?: boolean;
   createdAt: Date;
   updatedAt: Date;
 };

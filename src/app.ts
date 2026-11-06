@@ -74,7 +74,7 @@ export async function buildApp(c: Container, state = { shuttingDown: false }): P
       // "Aide & support": the contacts come from the configuration, not the app.
       registerLegalRoutes(api, { phone: c.config.SUPPORT_PHONE, email: c.config.SUPPORT_EMAIL });
       api.get('/reference/support', { schema: { tags: ['reference'] } }, async () => ({ phone: c.config.SUPPORT_PHONE, whatsapp: c.config.SUPPORT_PHONE, email: c.config.SUPPORT_EMAIL, hours: 'Lun.-sam. · 8h-20h' }));
-      organizations.registerRoutes(api, accounts.requirePlatformRole('admin'));
+      organizations.registerRoutes(api, accounts.requirePlatformRole('admin'), accounts.requireAnyPlatformRole(['caravan_editor']));
       payments.registerRoutes(api, accounts.requirePlatformRole('finance'));
       messaging.registerRoutes(api, accounts.requirePlatformRole('admin'));
       taxi.registerRoutes(api);
