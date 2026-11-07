@@ -40,8 +40,8 @@ const EnvSchema = Type.Object({
   DOCS_ENABLED: Bool,
 
   MONGODB_URI: Type.String({ default: 'mongodb://localhost:27018/?replicaSet=rs0' }),
-  // Kept from the first name (UGB Campus): the existing databases are called so.
-  MONGODB_DB: Type.String({ default: 'ugb_campus' }),
+  // Locally ugb_connect; staging and production set it (ugb_connect_staging, ugb_connect).
+  MONGODB_DB: Type.String({ default: 'ugb_connect' }),
   REDIS_URL: Type.String({ default: 'redis://localhost:6379' }),
   /** Namespaces Redis keys and BullMQ queues (tests use one per file). */
   REDIS_PREFIX: Type.String({ default: 'ugb' }),
